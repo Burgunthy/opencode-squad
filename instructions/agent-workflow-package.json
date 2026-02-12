@@ -1,0 +1,20 @@
+{
+  "name": "@opencode-ai/plugin-agent-workflow",
+  "version": "4.0.0",
+  "description": "Complete Claude Code compatible team workflow with real agent sessions",
+  "main": "agent-workflow.js",
+  "opencode": {
+    "plugin": true,
+    "commands": [
+      "team-spawn",
+      "team-add-task",
+      "team-complete",
+      "team-status",
+      "team-send",
+      "team-broadcast",
+      "team-shutdown",
+      "team-approve-shutdown",
+      "team-list"
+    ]
+  }
+}
