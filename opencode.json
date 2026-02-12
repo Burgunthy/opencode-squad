@@ -1,0 +1,45 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "opencode-sessions"
+  ],
+  "model": "zai-coding-plan/glm-4.7",
+  "small_model": "zai-coding-plan/glm-4.7-flash",
+  "permission": {
+    "edit": "allow",
+    "bash": {
+      "*": "allow"
+    },
+    "webfetch": "allow",
+    "websearch": "allow"
+  },
+  "command": {
+    "review": {
+      "template": "Review the code changes in $ARGUMENTS for best practices, security, and performance issues.",
+      "description": "Code review",
+      "agent": "code-reviewer"
+    },
+    "commit": {
+      "template": "Create a well-structured git commit for the current staged changes. Write a clear commit message following conventional commits.",
+      "description": "Smart commit"
+    },
+    "debug": {
+      "template": "Debug the following issue: $ARGUMENTS. Use systematic debugging methodology.",
+      "description": "Debug an issue",
+      "agent": "debugger"
+    },
+    "test": {
+      "template": "Run the test suite and analyze failures. Suggest fixes for failing tests. $ARGUMENTS",
+      "description": "Run and analyze tests"
+    },
+    "plan": {
+      "template": "Create an implementation plan for: $ARGUMENTS. Analyze requirements, identify files, and propose step-by-step approach.",
+      "description": "Create implementation plan"
+    }
+  },
+  "agent": {
+    "build": {
+      "prompt_append": "AGENT_CATALOG:\\n\\nLANGS: python-pro, django-dev, js-pro, ts-pro, nextjs, react, angular, vue, go, rust, cpp, java-arch, kotlin, spring, csharp, dotnet, rails, php, laravel, wp, swift, elixir, flutter, mobile\\nARCH: arch-review, microserv, api-des, graphql, fullstack\\nINFRA: cloud, k8s, tf, devops, deploy, platform, sre, network, azure\\nDB: db-admin, db-opt, postgres, sql\\nSEC: sec-audit(ro), sec-eng, pente, comp-audit(ro), ad-sec\\nQUAL: code-review, test-auto, qa, debugger, err-det, refactor\\nDATA/ML: data-eng, data-sci, data-ana, ml, mlops\\nAI: ai-eng, llm-arch, prompt-eng, nlp, mcp\\nRESEARCH: search, data-res, market, res-ana, web, competitive, trend\\nBIZ: ba, pm, proj, scrum\\nDOCS: doc-eng, api-doc, tech-writer\\nCOORD: agent-org, multi-coord, task-dist, workflow, context\\nSPECIAL: blockchain, game, embedded, iot, fintech, quant, payment, electron, websocket, slack\\nWINDOWS: win-infra, ps7, ps5.1, ps-module, ps-ui, ps-sec, m365, ps-it-ops\\nRULES: Framework-first. Read-only audits find issues, implementers fix them. Chain complex tasks via session. Parallel/background via session(task)/task(run_in_background).\\n\\nSESSION: opencode-sessions plugin. Use for agent delegation and multi-agent workflows. Modes: message(agent-to-agent in same conversation), new(clean handoff), compact(compress context). Syntax: session(agent, mode, task/text). Parallel: requires plugin, use session() with mode parallel. Use task() for background delegation. Chain complex workflows across multiple agents."
+    }
+  }
+}

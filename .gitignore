@@ -1,0 +1,26 @@
+# Dependencies
+node_modules
+package.json
+bun.lock
+package-lock.json
+yarn.lock
+
+# Security - NEVER upload API keys or secrets
+*.key
+*.pem
+.env
+.env.*
+credentials.json
+auth.json
+tokens.json
+secrets/
+secret*
+api_key*
+
+# Logs
+*.log
+npm-debug.log*
+
+# OS
+.DS_Store
+Thumbs.db
