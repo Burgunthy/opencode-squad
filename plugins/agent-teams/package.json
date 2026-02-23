@@ -1,0 +1,26 @@
+{
+  "name": "@opencode-ai/agent-teams",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.1.60",
+    "@opencode-ai/sdk": "^1.1.60",
+    "zod": "^4.1.8"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2",
+    "@types/bun": "latest"
+  }
+}

@@ -1,9 +1,11 @@
 # Dependencies
 node_modules
-package.json
 bun.lock
 package-lock.json
 yarn.lock
+
+# Root package.json (but allow plugins)
+/package.json
 
 # Security - NEVER upload API keys or secrets
 *.key
