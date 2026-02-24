@@ -1,0 +1,30 @@
+{
+  "name": "@opencode-ai/squad",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "scripts": {
+    "build": "tsc",
+    "dev": "tsc --watch",
+    "test": "bun test",
+    "test:unit": "bun test test/unit.test.ts",
+    "test:integration": "bun test test/integration.test.ts",
+    "test:all": "bun test test/**/*.test.ts"
+  },
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.1.60",
+    "@opencode-ai/sdk": "^1.1.60",
+    "zod": "^4.1.8"
+  },
+  "devDependencies": {
+    "typescript": "^5.8.2",
+    "@types/bun": "latest"
+  }
+}
