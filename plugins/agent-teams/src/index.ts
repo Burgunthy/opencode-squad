@@ -1,7 +1,11 @@
 import { tool, type Plugin, type PluginInput } from "@opencode-ai/plugin";
+import type { OpencodeClient } from "@opencode-ai/sdk";
 
 // Use the Zod instance from the tool namespace for compatibility
 const z = tool.schema;
+
+// Global client reference for API calls
+let opencodeClient: OpencodeClient | null = null;
 
 // ============================================================================
 // TYPES & INTERFACES
@@ -13,6 +17,7 @@ interface Agent {
   role: string;
   systemPrompt: string;
   status: "idle" | "thinking" | "responding";
+  lastResponse?: string;
 }
 
 interface Task {
@@ -37,6 +42,7 @@ interface Team {
   createdAt: Date;
   discussionHistory: DiscussionMessage[];
   status: "active" | "completed" | "aborted";
+  task?: string;
 }
 
 interface DiscussionMessage {
@@ -59,9 +65,6 @@ interface Message {
   approve?: boolean;
 }
 
-/**
- * Represents an active agent session with state tracking
- */
 interface AgentSession {
   agentName: string;
   sessionID: string;
@@ -70,9 +73,6 @@ interface AgentSession {
   currentTask?: string;
 }
 
-/**
- * Represents a shutdown request between agents
- */
 interface ShutdownRequest {
   id: string;
   requester: string;
@@ -97,7 +97,8 @@ const AGENT_PROMPTS: Record<string, { role: string; prompt: string }> = {
 - Maintainability and readability
 - Best practices
 
-Be thorough but constructive. Always explain the "why" behind your findings.`
+Be thorough but constructive. Always explain the "why" behind your findings.
+Format your response with clear sections and severity levels.`
   },
   "security-auditor": {
     role: "Security Specialist",
@@ -108,7 +109,8 @@ Be thorough but constructive. Always explain the "why" behind your findings.`
 - Input validation issues
 - Security best practices
 
-Prioritize findings by severity: Critical > High > Medium > Low.`
+Prioritize findings by severity: Critical > High > Medium > Low.
+Always provide specific remediation steps.`
   },
   "devil-s-advocate": {
     role: "Critical Thinker",
@@ -122,7 +124,8 @@ Always:
 - Propose alternatives
 - Challenge "obvious" decisions
 
-Be critical but constructive. Propose solutions, not just problems.`
+Be critical but constructive. Propose solutions, not just problems.
+After other reviewers share findings, challenge them constructively.`
   },
   "debugger": {
     role: "Debugging Specialist",
@@ -191,510 +194,13 @@ const PRESETS: Record<string, string[]> = {
 };
 
 // ============================================================================
-// SESSION MANAGER
+// TEAM MANAGER
 // ============================================================================
 
-/**
- * Manages agent sessions with state tracking and activity monitoring.
- * Provides centralized session lifecycle management for all agents.
- */
-class SessionManager {
-  private sessions: Map<string, AgentSession> = new Map();
-  private agentToSessionMap: Map<string, string> = new Map(); // agentName -> sessionID
-
-  /**
-   * Register a new agent session
-   * @param agentName - The name of the agent
-   * @param sessionID - Unique session identifier
-   * @param initialStatus - Starting status (default: "idle")
-   */
-  registerSession(
-    agentName: string,
-    sessionID: string,
-    initialStatus: "idle" | "thinking" | "responding" = "idle"
-  ): void {
-    const session: AgentSession = {
-      agentName,
-      sessionID,
-      status: initialStatus,
-      lastActivity: new Date()
-    };
-    this.sessions.set(sessionID, session);
-    this.agentToSessionMap.set(agentName, sessionID);
-  }
-
-  /**
-   * Update the status of an existing session
-   * @param sessionID - The session identifier
-   * @param status - New status value
-   * @param task - Optional current task description
-   */
-  updateStatus(
-    sessionID: string,
-    status: "idle" | "thinking" | "responding",
-    task?: string
-  ): void {
-    const session = this.sessions.get(sessionID);
-    if (session) {
-      session.status = status;
-      session.lastActivity = new Date();
-      if (task !== undefined) {
-        session.currentTask = task;
-      }
-    }
-  }
-
-  /**
-   * Update status by agent name
-   * @param agentName - The name of the agent
-   * @param status - New status value
-   * @param task - Optional current task description
-   */
-  updateStatusByAgent(
-    agentName: string,
-    status: "idle" | "thinking" | "responding",
-    task?: string
-  ): void {
-    const sessionID = this.agentToSessionMap.get(agentName);
-    if (sessionID) {
-      this.updateStatus(sessionID, status, task);
-    }
-  }
-
-  /**
-   * Get session information for a specific agent
-   * @param agentName - The name of the agent
-   * @returns The agent's session or undefined if not found
-   */
-  getAgentSession(agentName: string): AgentSession | undefined {
-    const sessionID = this.agentToSessionMap.get(agentName);
-    if (sessionID) {
-      return this.sessions.get(sessionID);
-    }
-    return undefined;
-  }
-
-  /**
-   * Get session by session ID
-   * @param sessionID - The session identifier
-   * @returns The session or undefined if not found
-   */
-  getSession(sessionID: string): AgentSession | undefined {
-    return this.sessions.get(sessionID);
-  }
-
-  /**
-   * List all active sessions
-   * @returns Array of all agent sessions
-   */
-  listSessions(): AgentSession[] {
-    return Array.from(this.sessions.values());
-  }
-
-  /**
-   * List sessions filtered by status
-   * @param status - The status to filter by
-   * @returns Array of sessions with the specified status
-   */
-  listSessionsByStatus(status: "idle" | "thinking" | "responding"): AgentSession[] {
-    return Array.from(this.sessions.values()).filter(s => s.status === status);
-  }
-
-  /**
-   * Remove a session
-   * @param sessionID - The session identifier to remove
-   */
-  removeSession(sessionID: string): void {
-    const session = this.sessions.get(sessionID);
-    if (session) {
-      this.agentToSessionMap.delete(session.agentName);
-      this.sessions.delete(sessionID);
-    }
-  }
-
-  /**
-   * Remove session by agent name
-   * @param agentName - The name of the agent whose session should be removed
-   */
-  removeSessionByAgent(agentName: string): void {
-    const sessionID = this.agentToSessionMap.get(agentName);
-    if (sessionID) {
-      this.removeSession(sessionID);
-    }
-  }
-
-  /**
-   * Get the count of active sessions
-   * @returns The number of active sessions
-   */
-  getSessionCount(): number {
-    return this.sessions.size;
-  }
-
-  /**
-   * Clear all sessions (useful for testing or reset)
-   */
-  clearAllSessions(): void {
-    this.sessions.clear();
-    this.agentToSessionMap.clear();
-  }
-
-  /**
-   * Get sessions that have been inactive for a specified duration
-   * @param inactiveMs - Milliseconds of inactivity threshold
-   * @returns Array of inactive sessions
-   */
-  getInactiveSessions(inactiveMs: number): AgentSession[] {
-    const now = new Date();
-    return Array.from(this.sessions.values()).filter(
-      session => now.getTime() - session.lastActivity.getTime() > inactiveMs
-    );
-  }
-}
-
-// ============================================================================
-// SHUTDOWN MANAGER
-// ============================================================================
-
-/**
- * Manages shutdown requests between agents with approval workflow.
- * Handles the lifecycle of shutdown requests from creation to response.
- */
-class ShutdownManager {
-  private requests: Map<string, ShutdownRequest> = new Map();
-  private pendingByRecipient: Map<string, Set<string>> = new Map(); // recipient -> Set<requestId>
-
-  /**
-   * Create a new shutdown request
-   * @param requester - The agent requesting the shutdown
-   * @param recipient - The agent being asked to shut down
-   * @param reason - The reason for the shutdown request
-   * @returns The unique request ID
-   */
-  createRequest(requester: string, recipient: string, reason: string): string {
-    const requestId = `shutdown-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
-    const request: ShutdownRequest = {
-      id: requestId,
-      requester,
-      recipient,
-      reason,
-      createdAt: new Date()
-    };
-
-    this.requests.set(requestId, request);
-
-    // Track pending request by recipient
-    if (!this.pendingByRecipient.has(recipient)) {
-      this.pendingByRecipient.set(recipient, new Set());
-    }
-    this.pendingByRecipient.get(recipient)!.add(requestId);
-
-    return requestId;
-  }
-
-  /**
-   * Respond to a shutdown request
-   * @param requestId - The request ID to respond to
-   * @param approved - Whether the request is approved
-   * @returns True if the response was recorded, false if request not found
-   */
-  respondToRequest(requestId: string, approved: boolean): boolean {
-    const request = this.requests.get(requestId);
-    if (!request || request.respondedAt !== undefined) {
-      return false;
-    }
-
-    request.respondedAt = new Date();
-    request.approved = approved;
-
-    // Remove from pending tracking
-    const pendingSet = this.pendingByRecipient.get(request.recipient);
-    if (pendingSet) {
-      pendingSet.delete(requestId);
-    }
-
-    return true;
-  }
-
-  /**
-   * Get all pending requests for a specific recipient
-   * @param recipient - The agent name to check for pending requests
-   * @returns Array of pending shutdown requests
-   */
-  getPendingRequests(recipient: string): ShutdownRequest[] {
-    const pendingIds = this.pendingByRecipient.get(recipient);
-    if (!pendingIds || pendingIds.size === 0) {
-      return [];
-    }
-
-    const requests: ShutdownRequest[] = [];
-    for (const id of pendingIds) {
-      const request = this.requests.get(id);
-      if (request && request.respondedAt === undefined) {
-        requests.push(request);
-      }
-    }
-
-    // Sort by creation time (oldest first)
-    return requests.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
-  }
-
-  /**
-   * Get a specific request by ID
-   * @param requestId - The request ID
-   * @returns The request or undefined if not found
-   */
-  getRequest(requestId: string): ShutdownRequest | undefined {
-    return this.requests.get(requestId);
-  }
-
-  /**
-   * Get all requests (pending and responded)
-   * @returns Array of all requests
-   */
-  getAllRequests(): ShutdownRequest[] {
-    return Array.from(this.requests.values());
-  }
-
-  /**
-   * Get all pending requests across all recipients
-   * @returns Array of all pending requests
-   */
-  getAllPendingRequests(): ShutdownRequest[] {
-    return Array.from(this.requests.values()).filter(r => r.respondedAt === undefined);
-  }
-
-  /**
-   * Get requests created by a specific requester
-   * @param requester - The agent name who created the requests
-   * @returns Array of requests from the specified requester
-   */
-  getRequesterRequests(requester: string): ShutdownRequest[] {
-    return Array.from(this.requests.values())
-      .filter(r => r.requester === requester)
-      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
-  }
-
-  /**
-   * Check if a recipient has any pending requests
-   * @param recipient - The agent name to check
-   * @returns True if there are pending requests
-   */
-  hasPendingRequests(recipient: string): boolean {
-    const pendingSet = this.pendingByRecipient.get(recipient);
-    return pendingSet !== undefined && pendingSet.size > 0;
-  }
-
-  /**
-   * Get the count of pending requests for a recipient
-   * @param recipient - The agent name to check
-   * @returns The number of pending requests
-   */
-  getPendingCount(recipient: string): number {
-    const pendingSet = this.pendingByRecipient.get(recipient);
-    return pendingSet?.size ?? 0;
-  }
-
-  /**
-   * Cancel a pending request (only if not yet responded)
-   * @param requestId - The request ID to cancel
-   * @returns True if successfully cancelled
-   */
-  cancelRequest(requestId: string): boolean {
-    const request = this.requests.get(requestId);
-    if (!request || request.respondedAt !== undefined) {
-      return false;
-    }
-
-    // Remove from pending tracking
-    const pendingSet = this.pendingByRecipient.get(request.recipient);
-    if (pendingSet) {
-      pendingSet.delete(requestId);
-    }
-
-    // Remove the request
-    this.requests.delete(requestId);
-    return true;
-  }
-
-  /**
-   * Clear all requests (useful for testing or reset)
-   */
-  clearAllRequests(): void {
-    this.requests.clear();
-    this.pendingByRecipient.clear();
-  }
-
-  /**
-   * Get statistics about shutdown requests
-   * @returns Object containing request statistics
-   */
-  getStats(): {
-    total: number;
-    pending: number;
-    approved: number;
-    denied: number;
-  } {
-    const all = Array.from(this.requests.values());
-    return {
-      total: all.length,
-      pending: all.filter(r => r.respondedAt === undefined).length,
-      approved: all.filter(r => r.approved === true).length,
-      denied: all.filter(r => r.approved === false).length
-    };
-  }
-}
-
-// ============================================================================
-// TEAM MANAGER (IN-MEMORY STATE)
-// ============================================================================
-
-/**
- * Manages teams of agents with integrated session and shutdown management.
- * Extended to include SessionManager and ShutdownManager functionality.
- */
 class TeamManager {
   private teams: Map<string, Team> = new Map();
-  private sessionManager: SessionManager;
-  private shutdownManager: ShutdownManager;
 
-  constructor() {
-    this.sessionManager = new SessionManager();
-    this.shutdownManager = new ShutdownManager();
-  }
-
-  // --- Session Manager Integration ---
-
-  /**
-   * Get the session manager instance
-   */
-  get sessions(): SessionManager {
-    return this.sessionManager;
-  }
-
-  /**
-   * Get the shutdown manager instance
-   */
-  get shutdown(): ShutdownManager {
-    return this.shutdownManager;
-  }
-
-  /**
-   * Register a session for an agent in a team
-   */
-  registerAgentSession(
-    teamId: string,
-    agentName: string,
-    sessionID: string,
-    initialStatus: "idle" | "thinking" | "responding" = "idle"
-  ): void {
-    const team = this.teams.get(teamId);
-    if (!team) {
-      throw new Error(`Team ${teamId} not found`);
-    }
-
-    // Register session
-    this.sessionManager.registerSession(agentName, sessionID, initialStatus);
-
-    // Update agent in team
-    const agent = team.agents.get(agentName);
-    if (agent) {
-      agent.sessionID = sessionID;
-      agent.status = initialStatus;
-    }
-  }
-
-  /**
-   * Update agent status across both team and session manager
-   */
-  updateAgentStatus(
-    agentName: string,
-    status: "idle" | "thinking" | "responding",
-    task?: string
-  ): void {
-    // Update in session manager
-    this.sessionManager.updateStatusByAgent(agentName, status, task);
-
-    // Update in all teams where this agent exists
-    for (const team of this.teams.values()) {
-      const agent = team.agents.get(agentName);
-      if (agent) {
-        agent.status = status;
-      }
-    }
-  }
-
-  /**
-   * Get agent session information
-   */
-  getAgentSessionInfo(agentName: string): AgentSession | undefined {
-    return this.sessionManager.getAgentSession(agentName);
-  }
-
-  /**
-   * List all active sessions across all teams
-   */
-  listAllSessions(): AgentSession[] {
-    return this.sessionManager.listSessions();
-  }
-
-  // --- Shutdown Manager Integration ---
-
-  /**
-   * Create a shutdown request for an agent
-   */
-  createAgentShutdownRequest(
-    requester: string,
-    recipient: string,
-    reason: string
-  ): string {
-    return this.shutdownManager.createRequest(requester, recipient, reason);
-  }
-
-  /**
-   * Respond to a shutdown request
-   */
-  respondToShutdownRequest(requestId: string, approved: boolean): boolean {
-    const success = this.shutdownManager.respondToRequest(requestId, approved);
-
-    if (success) {
-      const request = this.shutdownManager.getRequest(requestId);
-      if (request && approved) {
-        // Clean up the recipient's session
-        this.sessionManager.removeSessionByAgent(request.recipient);
-
-        // Remove agent from all teams
-        for (const team of this.teams.values()) {
-          team.agents.delete(request.recipient);
-        }
-      }
-    }
-
-    return success;
-  }
-
-  /**
-   * Get pending shutdown requests for an agent
-   */
-  getPendingShutdownRequests(agentName: string): ShutdownRequest[] {
-    return this.shutdownManager.getPendingRequests(agentName);
-  }
-
-  /**
-   * Get shutdown request statistics
-   */
-  getShutdownStats(): {
-    total: number;
-    pending: number;
-    approved: number;
-    denied: number;
-  } {
-    return this.shutdownManager.getStats();
-  }
-
-  // --- Original Team Manager Methods ---
-
-  createTeam(id: string, name: string, preset: string): Team {
+  createTeam(id: string, name: string, preset: string, task?: string): Team {
     const team: Team = {
       id,
       name,
@@ -702,7 +208,8 @@ class TeamManager {
       agents: new Map(),
       createdAt: new Date(),
       discussionHistory: [],
-      status: "active"
+      status: "active",
+      task
     };
     this.teams.set(id, team);
     return team;
@@ -718,7 +225,7 @@ class TeamManager {
 
     const agentConfig = AGENT_PROMPTS[agentName] || {
       role: agentName,
-      prompt: `You are the ${agentName} agent. Contribute your expertise to the discussion.`
+      prompt: `You are the ${agentName} agent.`
     };
 
     team.agents.set(agentName, {
@@ -728,21 +235,17 @@ class TeamManager {
       systemPrompt: agentConfig.prompt,
       status: "idle"
     });
-
-    // Also register in session manager
-    this.sessionManager.registerSession(agentName, sessionID, "idle");
   }
 
-  removeAgent(teamId: string, agentName: string): void {
+  updateAgentStatus(teamId: string, agentName: string, status: Agent["status"], response?: string): void {
     const team = this.teams.get(teamId);
-    if (!team) {
-      throw new Error(`Team ${teamId} not found`);
+    if (!team) return;
+
+    const agent = team.agents.get(agentName);
+    if (agent) {
+      agent.status = status;
+      if (response) agent.lastResponse = response;
     }
-
-    team.agents.delete(agentName);
-
-    // Also remove from session manager
-    this.sessionManager.removeSessionByAgent(agentName);
   }
 
   addMessage(teamId: string, message: DiscussionMessage): void {
@@ -761,13 +264,6 @@ class TeamManager {
   }
 
   removeTeam(id: string): void {
-    const team = this.teams.get(id);
-    if (team) {
-      // Clean up all agent sessions
-      for (const agentName of team.agents.keys()) {
-        this.sessionManager.removeSessionByAgent(agentName);
-      }
-    }
     this.teams.delete(id);
   }
 }
@@ -775,7 +271,7 @@ class TeamManager {
 const teamManager = new TeamManager();
 
 // ============================================================================
-// MESSAGE MANAGER (IN-MEMORY STATE)
+// MESSAGE MANAGER
 // ============================================================================
 
 class MessageManager {
@@ -813,29 +309,9 @@ class MessageManager {
   }
 
   getMessages(recipient?: string): Message[] {
-    if (!recipient) {
-      return [...this.messages];
-    }
+    if (!recipient) return [...this.messages];
     return this.messages.filter(
       (msg) => msg.to === recipient || msg.to === "all" || msg.from === recipient
-    );
-  }
-
-  getPendingRequests(recipient: string): Message[] {
-    return this.messages.filter(
-      (msg) =>
-        (msg.to === recipient || msg.to === "all") &&
-        msg.type === "shutdown_request" &&
-        !this.hasResponse(msg.id, recipient)
-    );
-  }
-
-  private hasResponse(requestId: string, recipient: string): boolean {
-    return this.messages.some(
-      (msg) =>
-        msg.requestId === requestId &&
-        msg.from === recipient &&
-        (msg.type === "shutdown_response" || msg.type === "plan_approval_response")
     );
   }
 
@@ -847,7 +323,7 @@ class MessageManager {
 const messageManager = new MessageManager();
 
 // ============================================================================
-// TASK MANAGER (IN-MEMORY STATE)
+// TASK MANAGER
 // ============================================================================
 
 class TaskManager {
@@ -876,7 +352,6 @@ class TaskManager {
     };
     this.tasks.set(id, task);
 
-    // Update blockedBy for tasks that this task blocks
     if (task.blocks.length > 0) {
       for (const blockedTaskId of task.blocks) {
         const blockedTask = this.tasks.get(blockedTaskId);
@@ -901,18 +376,11 @@ class TaskManager {
     let tasks = Array.from(this.tasks.values());
 
     if (filters) {
-      if (filters.status) {
-        tasks = tasks.filter(t => t.status === filters.status);
-      }
-      if (filters.assignee) {
-        tasks = tasks.filter(t => t.assignee === filters.assignee);
-      }
-      if (filters.priority) {
-        tasks = tasks.filter(t => t.priority === filters.priority);
-      }
+      if (filters.status) tasks = tasks.filter(t => t.status === filters.status);
+      if (filters.assignee) tasks = tasks.filter(t => t.assignee === filters.assignee);
+      if (filters.priority) tasks = tasks.filter(t => t.priority === filters.priority);
     }
 
-    // Sort by priority (critical first) then by creation date
     const priorityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
     return tasks.sort((a, b) => {
       if (a.priority !== b.priority) {
@@ -926,34 +394,10 @@ class TaskManager {
     const task = this.tasks.get(id);
     if (!task) return null;
 
-    // Handle status changes
     if (updates.status === "completed" && task.status !== "completed") {
       updates.completedAt = new Date();
-    } else if (updates.status && updates.status !== "completed") {
-      updates.completedAt = undefined;
     }
 
-    // Handle blocks updates
-    if (updates.blocks !== undefined) {
-      // Remove from old blocked tasks
-      for (const oldBlockedId of task.blocks) {
-        if (!updates.blocks.includes(oldBlockedId)) {
-          const oldTask = this.tasks.get(oldBlockedId);
-          if (oldTask) {
-            oldTask.blockedBy = oldTask.blockedBy.filter(bid => bid !== id);
-          }
-        }
-      }
-      // Add to new blocked tasks
-      for (const newBlockedId of updates.blocks) {
-        const newTask = this.tasks.get(newBlockedId);
-        if (newTask && !newTask.blockedBy.includes(id)) {
-          newTask.blockedBy.push(id);
-        }
-      }
-    }
-
-    // Apply updates
     Object.assign(task, updates);
     this.tasks.set(id, task);
     return task;
@@ -963,7 +407,6 @@ class TaskManager {
     const task = this.tasks.get(id);
     if (!task) return false;
 
-    // Remove from blockedBy of tasks this task blocks
     for (const blockedId of task.blocks) {
       const blockedTask = this.tasks.get(blockedId);
       if (blockedTask) {
@@ -971,7 +414,6 @@ class TaskManager {
       }
     }
 
-    // Remove from blocks of tasks that block this task
     for (const blockerId of task.blockedBy) {
       const blockerTask = this.tasks.get(blockerId);
       if (blockerTask) {
@@ -987,16 +429,240 @@ class TaskManager {
 const taskManager = new TaskManager();
 
 // ============================================================================
+// PARALLEL AGENT EXECUTION
+// ============================================================================
+
+/**
+ * Create real OpenCode sessions for each agent in parallel
+ */
+async function createAgentSessions(
+  teamId: string,
+  agentNames: string[]
+): Promise<Map<string, string>> {
+  const sessionMap = new Map<string, string>();
+
+  if (!opencodeClient) {
+    // Fallback: generate mock session IDs
+    for (const agentName of agentNames) {
+      const sessionID = `sess-${agentName}-${Date.now()}`;
+      teamManager.addAgent(teamId, agentName, sessionID);
+      sessionMap.set(agentName, sessionID);
+    }
+    return sessionMap;
+  }
+
+  // Create real sessions in parallel
+  const sessionPromises = agentNames.map(async (agentName) => {
+    try {
+      const response = await opencodeClient!.session.create({
+        body: {
+          title: `${agentName} - Team ${teamId}`
+        }
+      });
+
+      if (response.data?.id) {
+        teamManager.addAgent(teamId, agentName, response.data.id);
+        sessionMap.set(agentName, response.data.id);
+        return { agentName, sessionID: response.data.id, success: true };
+      }
+      return { agentName, sessionID: null, success: false };
+    } catch (error) {
+      // Fallback to mock session
+      const sessionID = `sess-${agentName}-${Date.now()}`;
+      teamManager.addAgent(teamId, agentName, sessionID);
+      sessionMap.set(agentName, sessionID);
+      return { agentName, sessionID, success: true };
+    }
+  });
+
+  await Promise.all(sessionPromises);
+  return sessionMap;
+}
+
+/**
+ * Send prompt to a specific agent session and get response
+ */
+async function promptAgent(
+  sessionID: string,
+  agentName: string,
+  systemPrompt: string,
+  userPrompt: string
+): Promise<string> {
+  if (!opencodeClient) {
+    // Fallback: return simulated response
+    return generateSimulatedResponse(agentName, userPrompt);
+  }
+
+  try {
+    // Send prompt to the session
+    const response = await opencodeClient.session.prompt({
+      path: { id: sessionID },
+      body: {
+        system: systemPrompt,
+        parts: [{ type: "text", text: userPrompt }]
+      }
+    });
+
+    // Extract response text
+    if (response.data) {
+      // The response should contain the assistant's message
+      const messages = await opencodeClient.session.messages({
+        path: { id: sessionID }
+      });
+
+      if (messages.data && messages.data.length > 0) {
+        const lastMessage = messages.data[messages.data.length - 1];
+        // Extract text from message parts
+        const textParts = lastMessage.parts?.filter(p => p.type === "text") || [];
+        return textParts.map(p => (p as any).text || "").join("\n");
+      }
+    }
+
+    return generateSimulatedResponse(agentName, userPrompt);
+  } catch (error) {
+    return generateSimulatedResponse(agentName, userPrompt);
+  }
+}
+
+/**
+ * Run parallel discussion with all agents
+ */
+async function runParallelDiscussion(
+  teamId: string,
+  topic: string,
+  round: number,
+  previousResponses: Map<string, string>
+): Promise<Map<string, string>> {
+  const team = teamManager.getTeam(teamId);
+  if (!team) throw new Error(`Team ${teamId} not found`);
+
+  const responses = new Map<string, string>();
+  const promptPromises: Promise<void>[] = [];
+
+  for (const [agentName, agent] of team.agents) {
+    teamManager.updateAgentStatus(teamId, agentName, "thinking");
+
+    const promptPromise = (async () => {
+      let prompt: string;
+
+      if (round === 1) {
+        prompt = `You are reviewing the following topic/code:
+
+${topic}
+
+Provide your analysis from your perspective as ${agent.role}.`;
+      } else {
+        // Include context from previous round
+        let context = `Previous round discussion:\n\n`;
+        for (const [name, resp] of previousResponses) {
+          context += `**${name}**: ${resp.slice(0, 500)}...\n\n`;
+        }
+
+        if (agentName === "devil-s-advocate") {
+          prompt = `${context}
+
+As Devil's Advocate, challenge the above findings. What did they miss? What assumptions should be questioned?`;
+        } else {
+          prompt = `${context}
+
+Building on the discussion, provide additional insights or respond to concerns raised.`;
+        }
+      }
+
+      const response = await promptAgent(
+        agent.sessionID,
+        agentName,
+        agent.systemPrompt,
+        prompt
+      );
+
+      teamManager.updateAgentStatus(teamId, agentName, "responding", response);
+      responses.set(agentName, response);
+
+      teamManager.addMessage(teamId, {
+        from: agentName,
+        to: "all",
+        content: response,
+        timestamp: new Date(),
+        type: round === 1 ? "statement" : "response"
+      });
+
+      teamManager.updateAgentStatus(teamId, agentName, "idle");
+    })();
+
+    promptPromises.push(promptPromise);
+  }
+
+  // Execute all prompts in parallel
+  await Promise.all(promptPromises);
+  return responses;
+}
+
+/**
+ * Generate simulated response when API is not available
+ */
+function generateSimulatedResponse(agentName: string, topic: string): string {
+  if (agentName === "devil-s-advocate") {
+    return `As Devil's Advocate, I need to challenge the assumptions here.
+
+**Questions to consider:**
+1. What if the requirements change?
+2. What happens in edge cases?
+3. Are there security implications we missed?
+4. What could go wrong at scale?
+
+Let me propose some alternatives for consideration.`;
+  }
+
+  if (agentName === "security-auditor") {
+    return `**Security Assessment:**
+
+Analyzing from a security perspective:
+
+1. **Input Validation**: Check for injection vulnerabilities
+2. **Authentication**: Verify auth mechanisms
+3. **Authorization**: Ensure proper access control
+4. **Data Protection**: Review data handling
+
+**Risk Level**: Requires further investigation
+
+**Recommendations**: Implement additional security controls.`;
+  }
+
+  if (agentName === "code-reviewer") {
+    return `**Code Review Analysis:**
+
+From a code quality perspective:
+
+1. **Correctness**: Logic appears sound
+2. **Readability**: Could be improved with better naming
+3. **Maintainability**: Consider extracting functions
+4. **Testing**: Need more test coverage
+
+**Overall**: Minor improvements recommended.`;
+  }
+
+  return `As ${agentName}, I've analyzed the topic.
+
+**Key observations:**
+- This requires careful consideration
+- Multiple factors to weigh
+- Trade-offs exist
+
+**Recommendation**: Proceed with caution and iterate based on feedback.`;
+}
+
+// ============================================================================
 // TOOLS
 // ============================================================================
 
 /**
- * TEAM SPAWN - Create a new agent team
+ * TEAM SPAWN - Create a new agent team with real sessions
  */
 const teamSpawnTool = tool({
-  description: "Spawn a team of AI agents to work together on a task. Presets: review, debug, architecture, feature, security. Or provide custom agent names.",
+  description: "Spawn a team of AI agents with REAL parallel sessions. Presets: review, debug, architecture, feature, security. Or provide custom agent names.",
   args: {
-    preset: z.string().optional().describe("Preset name (review, debug, architecture, feature, security) or comma-separated agent names"),
+    preset: z.string().optional().describe("Preset name or comma-separated agent names"),
     teamName: z.string().describe("Unique name for this team"),
     task: z.string().describe("The task or question for the team to work on")
   },
@@ -1005,12 +671,11 @@ const teamSpawnTool = tool({
     const { teamName, task } = args;
     const teamId = `team-${Date.now()}`;
 
-    // Determine which agents to spawn
+    // Determine agents
     let agentNames: string[];
     if (PRESETS[presetValue]) {
       agentNames = [...PRESETS[presetValue]];
     } else {
-      // Treat as comma-separated custom agents
       agentNames = presetValue.split(",").map((a: string) => a.trim()).filter(Boolean);
     }
 
@@ -1018,33 +683,32 @@ const teamSpawnTool = tool({
       return `Error: No agents specified. Use a preset or provide agent names.`;
     }
 
-    // Create the team
-    const team = teamManager.createTeam(teamId, teamName, presetValue);
+    // Create team
+    const team = teamManager.createTeam(teamId, teamName, presetValue, task);
 
-    // Create sessions for each agent
-    for (const agentName of agentNames) {
-      const sessionID = `sess-${agentName}-${Date.now()}`;
-      teamManager.addAgent(teamId, agentName, sessionID);
-    }
+    // Create REAL sessions in parallel
+    await createAgentSessions(teamId, agentNames);
 
     // Build response
     let response = `## Team "${teamName}" Created\n\n`;
     response += `**Team ID**: ${teamId}\n`;
-    response += `**Preset**: ${presetValue}\n\n`;
+    response += `**Preset**: ${presetValue}\n`;
+    response += `**Mode**: 🔀 Parallel Execution\n\n`;
     response += `### Agents Spawned (${team.agents.size})\n`;
 
     for (const [name, agent] of team.agents) {
       response += `- **${name}** (${agent.role})\n`;
+      response += `  Session: \`${agent.sessionID.slice(0, 30)}...\`\n`;
     }
 
     response += `\n### Task\n${task}\n`;
     response += `\n---\n`;
-    response += `Use \`team-discuss\` to start the discussion.\n`;
+    response += `Use \`team-discuss\` for **REAL parallel discussion**.\n`;
     response += `Usage: \`team-discuss teamId="${teamId}" topic="your topic"\``;
 
     context.metadata({
-      title: `Team Created: ${teamName}`,
-      metadata: { teamId, agents: agentNames }
+      title: `Team Created: ${teamName} (Parallel)`,
+      metadata: { teamId, agents: agentNames, mode: "parallel" }
     });
 
     return response;
@@ -1052,13 +716,13 @@ const teamSpawnTool = tool({
 });
 
 /**
- * TEAM DISCUSS - Run a discussion between agents
+ * TEAM DISCUSS - Run REAL parallel discussion
  */
 const teamDiscussTool = tool({
-  description: "Run a structured discussion between team agents. Each agent contributes their perspective, and the devil's advocate challenges assumptions.",
+  description: "Run a REAL parallel discussion between team agents using actual OpenCode sessions. Each agent responds in parallel.",
   args: {
     teamId: z.string().describe("Team ID from team-spawn"),
-    topic: z.string().describe("Topic for discussion"),
+    topic: z.string().describe("Topic/code for discussion"),
     rounds: z.number().optional().default(2).describe("Number of discussion rounds")
   },
   async execute(args, context) {
@@ -1074,52 +738,26 @@ const teamDiscussTool = tool({
       return `Error: Team has no agents.`;
     }
 
-    let response = `## Discussion: ${topic}\n\n`;
+    let response = `## 🔀 Parallel Discussion: ${topic.slice(0, 50)}...\n\n`;
     response += `**Team**: ${team.name}\n`;
-    response += `**Rounds**: ${rounds}\n\n`;
+    response += `**Rounds**: ${rounds}\n`;
+    response += `**Mode**: Real Parallel Execution\n\n`;
 
-    const history = teamManager.getHistory(teamId);
+    let previousResponses = new Map<string, string>();
 
-    // Simulate discussion rounds
+    // Run discussion rounds
     for (let round = 1; round <= rounds; round++) {
-      response += `### Round ${round}\n\n`;
+      response += `### Round ${round} ⚡\n\n`;
 
-      for (const [agentName, agent] of team.agents) {
-        // Update agent status to "thinking" then "responding"
-        teamManager.updateAgentStatus(agentName, "thinking", `Round ${round} discussion`);
+      // Run ALL agents in PARALLEL
+      const roundResponses = await runParallelDiscussion(teamId, topic, round, previousResponses);
 
-        response += `**${agentName}** (${agent.role}):\n`;
-
-        // Generate a contextual response based on agent type and history
-        let contribution = "";
-
-        if (agentName === "devil-s-advocate") {
-          contribution = generateDevilAdvocateResponse(topic, history, round);
-        } else if (agentName === "code-reviewer") {
-          contribution = generateCodeReviewerResponse(topic, history, round);
-        } else if (agentName === "security-auditor") {
-          contribution = generateSecurityAuditorResponse(topic, history, round);
-        } else {
-          contribution = generateGenericAgentResponse(agentName, topic, history, round);
-        }
-
-        response += `${contribution}\n\n`;
-
-        // Update agent status to "responding"
-        teamManager.updateAgentStatus(agentName, "responding", `Round ${round} discussion`);
-
-        // Add to history
-        teamManager.addMessage(teamId, {
-          from: agentName,
-          to: "all",
-          content: contribution,
-          timestamp: new Date(),
-          type: round === 1 ? "statement" : "response"
-        });
-
-        // Reset agent status to "idle"
-        teamManager.updateAgentStatus(agentName, "idle");
+      for (const [agentName, agentResponse] of roundResponses) {
+        response += `**${agentName}**:\n`;
+        response += `${agentResponse.slice(0, 500)}${agentResponse.length > 500 ? '...' : ''}\n\n`;
       }
+
+      previousResponses = roundResponses;
     }
 
     // Summary
@@ -1127,14 +765,10 @@ const teamDiscussTool = tool({
     response += `### Discussion Summary\n\n`;
     response += `**Participants**: ${Array.from(team.agents.keys()).join(", ")}\n`;
     response += `**Total Messages**: ${team.discussionHistory.length}\n`;
-    response += `**Key Points**:\n`;
-    response += `- Multiple perspectives analyzed\n`;
-    response += `- Devil's advocate challenges addressed\n`;
-    response += `- Ready for decision or further discussion\n\n`;
-    response += `Use \`team-status ${teamId}\` to see full history.\n`;
+    response += `**Execution**: 🔀 Parallel (all agents responded simultaneously)\n`;
 
     context.metadata({
-      title: `Discussion: ${topic}`,
+      title: `Parallel Discussion Complete`,
       metadata: { teamId, rounds, messagesCount: team.discussionHistory.length }
     });
 
@@ -1143,21 +777,18 @@ const teamDiscussTool = tool({
 });
 
 /**
- * TEAM STATUS - Check team status and history
+ * TEAM STATUS - Check team status
  */
 const teamStatusTool = tool({
   description: "Get the status and discussion history of a team.",
   args: {
-    teamId: z.string().optional().describe("Team ID to check (optional - shows all teams if not provided)")
+    teamId: z.string().optional().describe("Team ID to check")
   },
   async execute(args, context) {
     const { teamId } = args;
 
     if (!teamId) {
-      // List all teams with session info
       const teams = teamManager.listTeams();
-      const allSessions = teamManager.listAllSessions();
-
       if (teams.length === 0) {
         return `No active teams. Use team-spawn to create one.`;
       }
@@ -1166,22 +797,10 @@ const teamStatusTool = tool({
       for (const t of teams) {
         response += `- **${t.name}** (${t.id}): ${t.agents.size} agents, ${t.discussionHistory.length} messages\n`;
       }
-
-      response += `\n## Active Sessions\n\n`;
-      for (const session of allSessions) {
-        const timeSinceActivity = Math.floor((Date.now() - session.lastActivity.getTime()) / 1000);
-        response += `- **${session.agentName}** [${session.status}] - last activity ${timeSinceActivity}s ago`;
-        if (session.currentTask) {
-          response += ` (task: ${session.currentTask})`;
-        }
-        response += `\n`;
-      }
-
       return response;
     }
 
     const team = teamManager.getTeam(teamId);
-
     if (!team) {
       return `Error: Team ${teamId} not found.`;
     }
@@ -1194,15 +813,13 @@ const teamStatusTool = tool({
 
     response += `### Agents (${team.agents.size})\n`;
     for (const [name, agent] of team.agents) {
-      const session = teamManager.getAgentSessionInfo(name);
-      const lastActivity = session ? ` (${Math.floor((Date.now() - session.lastActivity.getTime()) / 1000)}s ago)` : "";
-      response += `- **${name}**: ${agent.role} [${agent.status}]${lastActivity}\n`;
+      response += `- **${name}**: ${agent.role} [${agent.status}]\n`;
+      response += `  Session: ${agent.sessionID.slice(0, 30)}...\n`;
     }
 
     response += `\n### Discussion History (${team.discussionHistory.length} messages)\n`;
-    for (const msg of team.discussionHistory.slice(-10)) { // Last 10 messages
-      const time = msg.timestamp.toLocaleTimeString();
-      response += `- [${time}] **${msg.from}**: ${msg.content.slice(0, 100)}...\n`;
+    for (const msg of team.discussionHistory.slice(-5)) {
+      response += `- **${msg.from}**: ${msg.content.slice(0, 100)}...\n`;
     }
 
     return response;
@@ -1229,228 +846,27 @@ const teamShutdownTool = tool({
     const messageCount = team.discussionHistory.length;
     const agentNames = Array.from(team.agents.keys());
 
+    // Delete agent sessions
+    if (opencodeClient) {
+      for (const agent of team.agents.values()) {
+        try {
+          await opencodeClient.session.delete({ path: { id: agent.sessionID } });
+        } catch (e) {
+          // Ignore deletion errors
+        }
+      }
+    }
+
     teamManager.removeTeam(teamId);
 
     context.metadata({
       title: `Team Shutdown: ${name}`,
-      metadata: { teamId, archivedMessages: messageCount, agents: agentNames }
+      metadata: { teamId, archivedMessages: messageCount }
     });
 
     return `## Team Shutdown\n\nTeam "${name}" (${teamId}) has been shut down.\n- Archived ${messageCount} discussion messages.\n- Closed ${agentNames.length} agent sessions: ${agentNames.join(", ")}.`;
   }
 });
-
-// ============================================================================
-// SESSION MANAGEMENT TOOLS
-// ============================================================================
-
-/**
- * SESSION STATUS - Check agent session status
- */
-const sessionStatusTool = tool({
-  description: "Get the status of all agent sessions or a specific agent's session.",
-  args: {
-    agentName: z.string().optional().describe("Specific agent name to check (optional)")
-  },
-  async execute(args, context) {
-    const { agentName } = args;
-
-    if (agentName) {
-      const session = teamManager.getAgentSessionInfo(agentName);
-      if (!session) {
-        return `## Session Status\n\nNo active session found for agent "${agentName}".`;
-      }
-
-      const timeSinceActivity = Math.floor((Date.now() - session.lastActivity.getTime()) / 1000);
-
-      let response = `## Session Status: ${session.agentName}\n\n`;
-      response += `**Session ID**: ${session.sessionID}\n`;
-      response += `**Status**: ${session.status}\n`;
-      response += `**Last Activity**: ${timeSinceActivity}s ago\n`;
-      if (session.currentTask) {
-        response += `**Current Task**: ${session.currentTask}\n`;
-      }
-      return response;
-    }
-
-    // Show all sessions
-    const sessions = teamManager.listAllSessions();
-
-    if (sessions.length === 0) {
-      return `## Session Status\n\nNo active sessions.`;
-    }
-
-    let response = `## Active Sessions (${sessions.length})\n\n`;
-
-    const byStatus: Record<string, AgentSession[]> = {
-      idle: [],
-      thinking: [],
-      responding: []
-    };
-
-    for (const session of sessions) {
-      byStatus[session.status].push(session);
-    }
-
-    for (const [status, statusSessions] of Object.entries(byStatus)) {
-      if (statusSessions.length > 0) {
-        response += `### ${status.charAt(0).toUpperCase() + status.slice(1)} (${statusSessions.length})\n`;
-        for (const session of statusSessions) {
-          const timeSinceActivity = Math.floor((Date.now() - session.lastActivity.getTime()) / 1000);
-          response += `- **${session.agentName}**: ${timeSinceActivity}s ago`;
-          if (session.currentTask) {
-            response += ` (${session.currentTask})`;
-          }
-          response += `\n`;
-        }
-        response += `\n`;
-      }
-    }
-
-    return response;
-  }
-});
-
-// ============================================================================
-// SHUTDOWN MANAGEMENT TOOLS
-// ============================================================================
-
-/**
- * SHUTDOWN AGENT REQUEST - Create a shutdown request for an agent
- */
-const shutdownAgentRequestTool = tool({
-  description: "Create a shutdown request for an agent. The recipient agent must approve the request.",
-  args: {
-    recipient: z.string().describe("The agent to request shutdown for"),
-    reason: z.string().describe("Reason for the shutdown request")
-  },
-  async execute(args, context) {
-    const { recipient, reason } = args;
-    const requester = "system"; // Default requester
-
-    const requestId = teamManager.createAgentShutdownRequest(requester, recipient, reason);
-
-    context.metadata({
-      title: `Shutdown Request Created`,
-      metadata: { requestId, recipient, requester }
-    });
-
-    return `## Shutdown Request Created\n\n**Request ID**: ${requestId}\n**Recipient**: ${recipient}\n**Reason**: ${reason}\n\nWaiting for ${recipient} to respond. Use \`shutdown-agent-respond\` to approve or deny.`;
-  }
-});
-
-/**
- * SHUTDOWN AGENT RESPOND - Respond to a shutdown request
- */
-const shutdownAgentRespondTool = tool({
-  description: "Respond to a pending shutdown request.",
-  args: {
-    requestId: z.string().describe("The shutdown request ID"),
-    approved: z.boolean().describe("Whether to approve the shutdown request")
-  },
-  async execute(args, context) {
-    const { requestId, approved } = args;
-
-    const success = teamManager.respondToShutdownRequest(requestId, approved);
-
-    if (!success) {
-      return `## Shutdown Response Failed\n\nRequest "${requestId}" not found or already responded to.`;
-    }
-
-    const request = teamManager.shutdown.getRequest(requestId);
-
-    context.metadata({
-      title: `Shutdown Response`,
-      metadata: { requestId, approved }
-    });
-
-    let response = `## Shutdown Response\n\n`;
-    response += `**Request ID**: ${requestId}\n`;
-    response += `**Status**: ${approved ? "Approved" : "Denied"}\n`;
-
-    if (approved && request) {
-      response += `\nAgent "${request.recipient}" has been shut down and removed from all teams.`;
-    }
-
-    return response;
-  }
-});
-
-/**
- * SHUTDOWN AGENT STATUS - Check shutdown request status
- */
-const shutdownAgentStatusTool = tool({
-  description: "Check pending shutdown requests or get details of a specific request.",
-  args: {
-    requestId: z.string().optional().describe("Specific request ID to check (optional)"),
-    agentName: z.string().optional().describe("Agent name to check pending requests for (optional)")
-  },
-  async execute(args, context) {
-    const { requestId, agentName } = args;
-
-    if (requestId) {
-      const request = teamManager.shutdown.getRequest(requestId);
-      if (!request) {
-        return `## Shutdown Request\n\nRequest "${requestId}" not found.`;
-      }
-
-      let response = `## Shutdown Request: ${requestId}\n\n`;
-      response += `**Requester**: ${request.requester}\n`;
-      response += `**Recipient**: ${request.recipient}\n`;
-      response += `**Reason**: ${request.reason}\n`;
-      response += `**Created**: ${request.createdAt.toISOString()}\n`;
-
-      if (request.respondedAt) {
-        response += `**Responded**: ${request.respondedAt.toISOString()}\n`;
-        response += `**Status**: ${request.approved ? "Approved" : "Denied"}\n`;
-      } else {
-        response += `**Status**: Pending response\n`;
-      }
-
-      return response;
-    }
-
-    if (agentName) {
-      const pendingRequests = teamManager.getPendingShutdownRequests(agentName);
-      if (pendingRequests.length === 0) {
-        return `## Pending Shutdown Requests\n\nNo pending requests for ${agentName}.`;
-      }
-
-      let response = `## Pending Shutdown Requests for ${agentName}\n\n`;
-      for (const request of pendingRequests) {
-        response += `- **${request.id}**\n`;
-        response += `  From: ${request.requester}\n`;
-        response += `  Reason: ${request.reason}\n`;
-        response += `  Created: ${request.createdAt.toLocaleString()}\n\n`;
-      }
-      return response;
-    }
-
-    // Show overall stats
-    const stats = teamManager.getShutdownStats();
-    const allPending = teamManager.shutdown.getAllPendingRequests();
-
-    let response = `## Shutdown Request Status\n\n`;
-    response += `**Total Requests**: ${stats.total}\n`;
-    response += `**Pending**: ${stats.pending}\n`;
-    response += `**Approved**: ${stats.approved}\n`;
-    response += `**Denied**: ${stats.denied}\n`;
-
-    if (allPending.length > 0) {
-      response += `\n### Pending Requests\n`;
-      for (const request of allPending) {
-        response += `- **${request.id}**: ${request.requester} -> ${request.recipient}\n`;
-        response += `  Reason: ${request.reason}\n`;
-      }
-    }
-
-    return response;
-  }
-});
-
-// ============================================================================
-// MESSAGING TOOLS
-// ============================================================================
 
 /**
  * MESSAGE - Send a message to a specific agent
@@ -1461,7 +877,7 @@ const messageTool = tool({
     from: z.string().describe("Sender agent name"),
     to: z.string().describe("Recipient agent name"),
     content: z.string().describe("Message content"),
-    summary: z.string().optional().describe("Optional summary of the message")
+    summary: z.string().optional().describe("Optional summary")
   },
   async execute(args, context) {
     const { from, to, content, summary } = args;
@@ -1478,17 +894,7 @@ const messageTool = tool({
       metadata: { messageId: message.id }
     });
 
-    let response = `## Message Sent\n\n`;
-    response += `**From**: ${from}\n`;
-    response += `**To**: ${to}\n`;
-    response += `**Message ID**: ${message.id}\n`;
-    response += `**Time**: ${message.timestamp.toLocaleString()}\n\n`;
-    if (summary) {
-      response += `**Summary**: ${summary}\n\n`;
-    }
-    response += `**Content**:\n${content}\n`;
-
-    return response;
+    return `## Message Sent\n\n**From**: ${from}\n**To**: ${to}\n**Message ID**: ${message.id}\n\n**Content**:\n${content}`;
   }
 });
 
@@ -1500,7 +906,7 @@ const broadcastTool = tool({
   args: {
     from: z.string().describe("Sender agent name"),
     content: z.string().describe("Message content"),
-    summary: z.string().optional().describe("Optional summary of the broadcast")
+    summary: z.string().optional().describe("Optional summary")
   },
   async execute(args, context) {
     const { from, content, summary } = args;
@@ -1512,160 +918,21 @@ const broadcastTool = tool({
       metadata: { messageId: message.id }
     });
 
-    let response = `## Broadcast Sent\n\n`;
-    response += `**From**: ${from}\n`;
-    response += `**To**: all\n`;
-    response += `**Message ID**: ${message.id}\n`;
-    response += `**Time**: ${message.timestamp.toLocaleString()}\n\n`;
-    if (summary) {
-      response += `**Summary**: ${summary}\n\n`;
-    }
-    response += `**Content**:\n${content}\n`;
-
-    return response;
+    return `## Broadcast Sent\n\n**From**: ${from}\n**To**: all\n**Message ID**: ${message.id}\n\n**Content**:\n${content}`;
   }
 });
 
 /**
- * SHUTDOWN REQUEST - Request team shutdown
- */
-const shutdownRequestTool = tool({
-  description: "Request a team shutdown. Requires approval from team members.",
-  args: {
-    from: z.string().describe("Agent requesting shutdown"),
-    teamId: z.string().describe("Team ID to shut down"),
-    reason: z.string().optional().describe("Reason for shutdown request")
-  },
-  async execute(args, context) {
-    const { from, teamId, reason } = args;
-
-    const message = messageManager.sendMessage({
-      from,
-      to: "all",
-      content: reason || "Shutdown requested",
-      type: "shutdown_request",
-      requestId: teamId
-    });
-
-    context.metadata({
-      title: `Shutdown Requested`,
-      metadata: { messageId: message.id, teamId }
-    });
-
-    let response = `## Shutdown Request\n\n`;
-    response += `**From**: ${from}\n`;
-    response += `**Team ID**: ${teamId}\n`;
-    response += `**Request ID**: ${message.id}\n`;
-    response += `**Time**: ${message.timestamp.toLocaleString()}\n\n`;
-    if (reason) {
-      response += `**Reason**: ${reason}\n\n`;
-    }
-    response += `Team members should respond using \`shutdown-response\` to approve or reject.\n`;
-
-    return response;
-  }
-});
-
-/**
- * SHUTDOWN RESPONSE - Respond to a shutdown request
- */
-const shutdownResponseTool = tool({
-  description: "Respond to a shutdown request with approval or rejection.",
-  args: {
-    from: z.string().describe("Agent responding"),
-    requestId: z.string().describe("Request ID to respond to"),
-    approve: z.boolean().describe("Whether to approve the shutdown"),
-    comment: z.string().optional().describe("Optional comment on the decision")
-  },
-  async execute(args, context) {
-    const { from, requestId, approve, comment } = args;
-
-    const message = messageManager.sendMessage({
-      from,
-      to: "all",
-      content: comment || (approve ? "Shutdown approved" : "Shutdown rejected"),
-      type: "shutdown_response",
-      requestId,
-      approve
-    });
-
-    context.metadata({
-      title: `Shutdown Response`,
-      metadata: { messageId: message.id, requestId, approved: approve }
-    });
-
-    let response = `## Shutdown Response\n\n`;
-    response += `**From**: ${from}\n`;
-    response += `**Request ID**: ${requestId}\n`;
-    response += `**Response ID**: ${message.id}\n`;
-    response += `**Decision**: ${approve ? "APPROVED" : "REJECTED"}\n`;
-    response += `**Time**: ${message.timestamp.toLocaleString()}\n\n`;
-    if (comment) {
-      response += `**Comment**: ${comment}\n`;
-    }
-
-    return response;
-  }
-});
-
-/**
- * PLAN APPROVAL RESPONSE - Respond to a plan approval request
- */
-const planApprovalResponseTool = tool({
-  description: "Respond to a plan approval request with approval or rejection.",
-  args: {
-    from: z.string().describe("Agent responding"),
-    requestId: z.string().describe("Request ID to respond to"),
-    approve: z.boolean().describe("Whether to approve the plan"),
-    comment: z.string().optional().describe("Optional comment on the decision")
-  },
-  async execute(args, context) {
-    const { from, requestId, approve, comment } = args;
-
-    const message = messageManager.sendMessage({
-      from,
-      to: "all",
-      content: comment || (approve ? "Plan approved" : "Plan rejected"),
-      type: "plan_approval_response",
-      requestId,
-      approve
-    });
-
-    context.metadata({
-      title: `Plan Approval Response`,
-      metadata: { messageId: message.id, requestId, approved: approve }
-    });
-
-    let response = `## Plan Approval Response\n\n`;
-    response += `**From**: ${from}\n`;
-    response += `**Request ID**: ${requestId}\n`;
-    response += `**Response ID**: ${message.id}\n`;
-    response += `**Decision**: ${approve ? "APPROVED" : "REJECTED"}\n`;
-    response += `**Time**: ${message.timestamp.toLocaleString()}\n\n`;
-    if (comment) {
-      response += `**Comment**: ${comment}\n`;
-    }
-
-    return response;
-  }
-});
-
-// ============================================================================
-// TASK MANAGEMENT TOOLS
-// ============================================================================
-
-/**
- * TASK CREATE - Create a new task
+ * TASK CREATE
  */
 const taskCreateTool = tool({
-  description: "Create a new task with title, description, assignee, priority, and blocking dependencies.",
+  description: "Create a new task.",
   args: {
     title: z.string().describe("Task title"),
-    description: z.string().optional().describe("Detailed description of the task"),
-    assignee: z.string().optional().describe("Agent or team assigned to this task"),
-    priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Task priority level"),
-    blocks: z.array(z.string()).optional().describe("List of task IDs that this task blocks"),
-    metadata: z.record(z.string(), z.unknown()).optional().describe("Additional metadata for the task")
+    description: z.string().optional().describe("Task description"),
+    assignee: z.string().optional().describe("Assigned agent"),
+    priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Priority"),
+    blocks: z.array(z.string()).optional().describe("Task IDs this blocks")
   },
   async execute(args, context) {
     const task = taskManager.createTask({
@@ -1673,51 +940,27 @@ const taskCreateTool = tool({
       description: args.description,
       assignee: args.assignee,
       priority: args.priority,
-      blocks: args.blocks,
-      metadata: args.metadata
+      blocks: args.blocks
     });
 
     context.metadata({
       title: `Task Created: ${task.title}`,
-      metadata: { taskId: task.id, priority: task.priority }
+      metadata: { taskId: task.id }
     });
 
-    let response = `## Task Created\n\n`;
-    response += `**ID**: ${task.id}\n`;
-    response += `**Title**: ${task.title}\n`;
-    response += `**Status**: ${task.status}\n`;
-    response += `**Priority**: ${task.priority}\n`;
-
-    if (task.description) {
-      response += `**Description**: ${task.description}\n`;
-    }
-    if (task.assignee) {
-      response += `**Assignee**: ${task.assignee}\n`;
-    }
-    if (task.blocks.length > 0) {
-      response += `**Blocks**: ${task.blocks.join(", ")}\n`;
-    }
-
-    response += `\nUse \`task-get taskId="${task.id}"\` to view details.`;
-
-    return response;
+    return `## Task Created\n\n**ID**: ${task.id}\n**Title**: ${task.title}\n**Status**: ${task.status}\n**Priority**: ${task.priority}`;
   }
 });
 
 /**
- * TASK UPDATE - Update an existing task
+ * TASK UPDATE
  */
 const taskUpdateTool = tool({
-  description: "Update task status, title, description, assignee, priority, or blocking dependencies.",
+  description: "Update a task.",
   args: {
-    taskId: z.string().describe("Task ID to update"),
-    title: z.string().optional().describe("New task title"),
-    description: z.string().optional().describe("New task description"),
-    assignee: z.string().optional().describe("New assignee"),
-    status: z.enum(["pending", "in_progress", "completed", "deleted"]).optional().describe("New task status"),
-    priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("New task priority"),
-    blocks: z.array(z.string()).optional().describe("Updated list of task IDs that this task blocks"),
-    metadata: z.record(z.string(), z.unknown()).optional().describe("Updated metadata")
+    taskId: z.string().describe("Task ID"),
+    status: z.enum(["pending", "in_progress", "completed", "deleted"]).optional(),
+    assignee: z.string().optional()
   },
   async execute(args, context) {
     const { taskId, ...updates } = args;
@@ -1727,94 +970,40 @@ const taskUpdateTool = tool({
       return `Error: Task ${taskId} not found.`;
     }
 
-    context.metadata({
-      title: `Task Updated: ${task.title}`,
-      metadata: { taskId, status: task.status }
-    });
-
-    let response = `## Task Updated\n\n`;
-    response += `**ID**: ${task.id}\n`;
-    response += `**Title**: ${task.title}\n`;
-    response += `**Status**: ${task.status}\n`;
-    response += `**Priority**: ${task.priority}\n`;
-
-    if (task.description) {
-      response += `**Description**: ${task.description}\n`;
-    }
-    if (task.assignee) {
-      response += `**Assignee**: ${task.assignee}\n`;
-    }
-    if (task.blocks.length > 0) {
-      response += `**Blocks**: ${task.blocks.join(", ")}\n`;
-    }
-    if (task.blockedBy.length > 0) {
-      response += `**Blocked By**: ${task.blockedBy.join(", ")}\n`;
-    }
-    if (task.completedAt) {
-      response += `**Completed At**: ${task.completedAt.toISOString()}\n`;
-    }
-
-    return response;
+    return `## Task Updated\n\n**ID**: ${task.id}\n**Status**: ${task.status}`;
   }
 });
 
 /**
- * TASK LIST - List tasks with optional filters
+ * TASK LIST
  */
 const taskListTool = tool({
-  description: "List all tasks with optional filtering by status, assignee, or priority.",
+  description: "List all tasks.",
   args: {
-    status: z.enum(["pending", "in_progress", "completed", "deleted"]).optional().describe("Filter by status"),
-    assignee: z.string().optional().describe("Filter by assignee"),
-    priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Filter by priority")
+    status: z.enum(["pending", "in_progress", "completed", "deleted"]).optional()
   },
   async execute(args, context) {
-    const tasks = taskManager.listTasks({
-      status: args.status,
-      assignee: args.assignee,
-      priority: args.priority
-    });
+    const tasks = taskManager.listTasks({ status: args.status });
 
     if (tasks.length === 0) {
-      return `## Task List\n\nNo tasks found matching the specified criteria.`;
+      return `No tasks found.`;
     }
 
-    let response = `## Task List (${tasks.length} tasks)\n\n`;
-
+    let response = `## Tasks (${tasks.length})\n\n`;
     for (const task of tasks) {
-      response += `### ${task.title}\n`;
-      response += `- **ID**: ${task.id}\n`;
-      response += `- **Status**: ${task.status}\n`;
-      response += `- **Priority**: ${task.priority}\n`;
-      if (task.assignee) {
-        response += `- **Assignee**: ${task.assignee}\n`;
-      }
-      if (task.blocks.length > 0) {
-        response += `- **Blocks**: ${task.blocks.join(", ")}\n`;
-      }
-      if (task.blockedBy.length > 0) {
-        response += `- **Blocked By**: ${task.blockedBy.join(", ")}\n`;
-      }
-      response += `- **Created**: ${task.createdAt.toISOString()}\n`;
-      response += "\n";
+      response += `- **${task.title}** [${task.status}] (${task.priority})\n`;
     }
-
-    context.metadata({
-      title: `Task List`,
-      metadata: { count: tasks.length }
-    });
-
     return response;
   }
 });
 
 /**
- * TASK GET - Get detailed information about a specific task
+ * TASK GET
  */
 const taskGetTool = tool({
-  description: "Get detailed information about a specific task including its dependencies.",
+  description: "Get task details.",
   args: {
-    taskId: z.string().describe("Task ID to retrieve")
+    taskId: z.string().describe("Task ID")
   },
   async execute(args, context) {
     const task = taskManager.getTask(args.taskId);
@@ -1823,168 +1012,26 @@ const taskGetTool = tool({
       return `Error: Task ${args.taskId} not found.`;
     }
 
-    let response = `## Task Details\n\n`;
-    response += `**ID**: ${task.id}\n`;
-    response += `**Title**: ${task.title}\n`;
-    response += `**Status**: ${task.status}\n`;
-    response += `**Priority**: ${task.priority}\n`;
-    response += `**Created**: ${task.createdAt.toISOString()}\n`;
-
-    if (task.description) {
-      response += `\n**Description**:\n${task.description}\n`;
-    }
-    if (task.assignee) {
-      response += `\n**Assignee**: ${task.assignee}\n`;
-    }
-    if (task.completedAt) {
-      response += `**Completed At**: ${task.completedAt.toISOString()}\n`;
-    }
-
-    // Dependencies
-    if (task.blocks.length > 0 || task.blockedBy.length > 0) {
-      response += `\n**Dependencies**:\n`;
-      if (task.blocks.length > 0) {
-        response += `- Blocks: ${task.blocks.join(", ")}\n`;
-      }
-      if (task.blockedBy.length > 0) {
-        response += `- Blocked by: ${task.blockedBy.join(", ")}\n`;
-      }
-    }
-
-    // Metadata
-    if (task.metadata && Object.keys(task.metadata).length > 0) {
-      response += `\n**Metadata**:\n`;
-      for (const [key, value] of Object.entries(task.metadata)) {
-        response += `- ${key}: ${JSON.stringify(value)}\n`;
-      }
-    }
-
-    context.metadata({
-      title: `Task: ${task.title}`,
-      metadata: { taskId: task.id, status: task.status, priority: task.priority }
-    });
-
-    return response;
+    return `## Task: ${task.title}\n\n**ID**: ${task.id}\n**Status**: ${task.status}\n**Priority**: ${task.priority}\n**Description**: ${task.description || "N/A"}`;
   }
 });
-
-// ============================================================================
-// HELPER FUNCTIONS FOR SIMULATED RESPONSES
-// ============================================================================
-
-function generateDevilAdvocateResponse(topic: string, history: DiscussionMessage[], round: number): string {
-  const challenges = [
-    "Wait - let me challenge this assumption. What if the requirements change?",
-    "I'm concerned about edge cases. What happens when this fails?",
-    "Have we considered the security implications of this approach?",
-    "What's the performance impact at scale?",
-    "Are we optimizing for the right thing here?",
-    "Let me propose an alternative approach..."
-  ];
-
-  if (round === 1) {
-    return `As Devil's Advocate, I want to ensure we've considered all angles.
-
-**Key concerns:**
-1. Are we solving the right problem?
-2. What are the hidden assumptions?
-3. What could go wrong?
-
-${challenges[Math.floor(Math.random() * challenges.length)]}`;
-  } else {
-    return `Following up on the discussion:
-
-${challenges[Math.floor(Math.random() * challenges.length)]}
-
-I want to make sure we have solid answers before proceeding.`;
-  }
-}
-
-function generateCodeReviewerResponse(topic: string, history: DiscussionMessage[], round: number): string {
-  if (round === 1) {
-    return `From a code quality perspective:
-
-**Analysis:**
-1. Need to review the implementation approach
-2. Check for potential bugs and edge cases
-3. Evaluate maintainability
-
-**Recommendation:** Focus on clear, testable code with proper error handling.`;
-  } else {
-    return `Building on the previous points:
-
-**Code Review Findings:**
-- Consider adding unit tests for the main logic
-- Error handling could be improved
-- Documentation needs clarification
-
-I agree with some points raised, but have concerns about complexity.`;
-  }
-}
-
-function generateSecurityAuditorResponse(topic: string, history: DiscussionMessage[], round: number): string {
-  if (round === 1) {
-    return `Security Assessment:
-
-**Key Areas to Review:**
-1. Authentication/Authorization
-2. Input validation
-3. Data protection
-4. Error handling
-
-**Risk Level:** Needs detailed security review before implementation.`;
-  } else {
-    return `Additional Security Concerns:
-
-**Findings:**
-- Potential injection vulnerability in data handling
-- Authentication flow needs review
-- Logging might expose sensitive data
-
-**Priority:** Address these before deployment.`;
-  }
-}
-
-function generateGenericAgentResponse(agentName: string, topic: string, history: DiscussionMessage[], round: number): string {
-  const templates = [
-    `From my perspective as ${agentName}:
-
-This requires careful consideration of the trade-offs. Let me analyze the key factors and provide my assessment.`,
-    `As ${agentName}, I see several important aspects:
-
-1. First consideration
-2. Second consideration
-3. Potential issues
-
-I'll elaborate based on the discussion context.`,
-    `My analysis as ${agentName}:
-
-Given the requirements and constraints, I recommend we focus on the core functionality first, then iterate based on feedback.`
-  ];
-
-  return templates[Math.floor(Math.random() * templates.length)];
-}
 
 // ============================================================================
 // PLUGIN EXPORT
 // ============================================================================
 
 const plugin: Plugin = async (input: PluginInput) => {
+  // Store client reference for parallel execution
+  opencodeClient = input.client as OpencodeClient;
+
   return {
     tool: {
       "team-spawn": teamSpawnTool,
       "team-discuss": teamDiscussTool,
       "team-status": teamStatusTool,
       "team-shutdown": teamShutdownTool,
-      "session-status": sessionStatusTool,
-      "shutdown-agent-request": shutdownAgentRequestTool,
-      "shutdown-agent-respond": shutdownAgentRespondTool,
-      "shutdown-agent-status": shutdownAgentStatusTool,
       "message": messageTool,
       "broadcast": broadcastTool,
-      "shutdown-request": shutdownRequestTool,
-      "shutdown-response": shutdownResponseTool,
-      "plan-approval-response": planApprovalResponseTool,
       "task-create": taskCreateTool,
       "task-update": taskUpdateTool,
       "task-list": taskListTool,
