@@ -1,7 +1,6 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
-    "opencode-sessions",
     "./plugins/agent-teams"
   ],
   "model": "zai-coding-plan/glm-4.7",

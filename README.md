@@ -1,167 +1,195 @@
 # OpenCode Agent Teams Plugin
 
-A powerful plugin for [OpenCode](https://opencode.ai) that enables multi-agent team collaboration, matching Claude Code's agent-teams functionality.
+A **real** multi-agent team collaboration plugin for [OpenCode](https://opencode.ai) that actually spawns subagents and executes them in parallel.
 
-## Features
+## ⚡ Key Difference from v1
 
-- 🔀 **Parallel Execution**: All agents execute in parallel using `Promise.all()`
-- 🎯 **Multiple Presets**: review, security, debug, feature, architecture
-- 😈 **Devil's Advocate**: Every team includes a critical thinker
-- 💬 **Inter-Agent Communication**: Agents share findings with each other
-- 🗣️ **Natural Language Support**: Request teams with plain language
+| Feature | v1 (Fake) | v2 (Real) |
+|---------|-----------|-----------|
+| Session Creation | Fake ID string | `client.session.create()` |
+| Prompt Delivery | None | `client.session.prompt()` |
+| Result Waiting | Hardcoded text | `waitForSessionCompletion()` |
+| Parallel Execution | for loop | `Promise.all()` |
+| Error Handling | None | Retry logic + timeout |
 
 ## Installation
 
 ```bash
-# Clone the repository
-git clone https://github.com/Burgunthy/opencode-agent-team.git ~/.config/opencode
-
-# Build the plugin
 cd ~/.config/opencode/plugins/agent-teams
 bun install && bun run build
 ```
 
+## Configuration
+
+```json
+{
+  "plugin": ["./plugins/agent-teams"]
+}
+```
+
+## Tools
+
+| Tool | Description |
+|------|-------------|
+| `team-spawn` | Create a team with agents from opencode.json |
+| `team-execute` | Execute all agents in parallel and collect results |
+| `team-discuss` | Sequential discussion with context sharing |
+| `team-status` | Check team status |
+| `team-shutdown` | Cleanup and remove team |
+| `team-auto` | Natural language → auto preset → parallel execution |
+
 ## Usage
 
-### Natural Language Request
+### Natural Language (Recommended)
 
 ```
-/team-auto request="이 코드를 팀을 짜서 보안 검토해줘"
-/team-auto request="버그를 디버그 팀으로 찾아줘"
+/team-auto request="auth.ts 보안 검토해줘"
 ```
 
-### Manual Commands
+Auto-detects "보안" → uses `security` preset → spawns security-auditor + devil-s-advocate → parallel execution → results.
 
-```bash
-# Create a team
-/team-spawn preset="review" teamName="my-review" task="코드 리뷰"
+### Manual Workflow
 
-# Run discussion
-/team-discuss teamId="team-xxx" topic="SQL injection 검토"
+```
+# 1. Create team
+/team-spawn preset="review" teamName="auth-review" task="auth.ts 코드 리뷰"
 
-# Check status
+# 2. Execute in parallel
+/team-execute teamId="team-xxx"
+
+# 3. Check status
 /team-status teamId="team-xxx"
 
-# Shutdown
+# 4. Cleanup
 /team-shutdown teamId="team-xxx"
 ```
 
+### Discussion Mode
+
+```
+/team-discuss teamId="team-xxx" topic="SQL injection 검토" rounds=2
+```
+
+Sequential execution with context sharing between rounds.
+
 ## Presets
 
-| Preset | Agents | Use Case |
-|--------|--------|----------|
-| `review` | code-reviewer, security-auditor, devil-s-advocate | Code review |
-| `security` | security-auditor, devil-s-advocate | Security audit |
-| `debug` | debugger, devil-s-advocate | Debugging |
-| `feature` | frontend-dev, backend-dev, test-automator, devil-s-advocate | Feature development |
-| `architecture` | architect, devil-s-advocate | System design |
+| Preset | Agents |
+|--------|--------|
+| `review` | code-reviewer, security-auditor, devil-s-advocate |
+| `security` | security-auditor, devil-s-advocate |
+| `debug` | debugger, devil-s-advocate |
+| `planning` | planner, devil-s-advocate |
+| `implementation` | backend-developer, frontend-developer, test-automator, devil-s-advocate |
+| `fullstack` | fullstack-developer, devil-s-advocate |
+| `research` | explore, data-scientist, devil-s-advocate |
+| `ai` | ai-engineer, llm-architect, prompt-engineer, devil-s-advocate |
 
-## Custom Teams
-
-```
-/team-spawn preset="code-reviewer,security-auditor,devil-s-advocate" teamName="custom" task="..."
-```
-
-## Available Agents
-
-| Agent | Role |
-|-------|------|
-| `code-reviewer` | Code Quality Specialist |
-| `security-auditor` | Security Specialist |
-| `devil-s-advocate` | Critical Thinker |
-| `debugger` | Debugging Specialist |
-| `architect` | System Architect |
-
-## How It Works
+## Architecture
 
 ```
-┌─────────────────────────────────────────────────────┐
-│                    Team Workflow                     │
-├─────────────────────────────────────────────────────┤
-│                                                      │
-│  1. /team-spawn                                      │
-│     └─ Create team with preset agents               │
-│                                                      │
-│  2. /team-discuss                                    │
-│     └─ Round 1: Each agent analyzes independently   │
-│     └─ Round 2: Agents see others' findings         │
-│     └─ Devil's Advocate challenges all              │
-│                                                      │
-│  3. /team-status                                     │
-│     └─ View team progress                           │
-│                                                      │
-│  4. /team-shutdown                                   │
-│     └─ Clean up team                                │
-│                                                      │
-└─────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────┐
+│                      Plugin Init                         │
+│  globalClient = input.client                            │
+└─────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────┐
+│                    team-spawn                            │
+│  1. Load agents from opencode.json                      │
+│  2. Create Team object in Map                           │
+│  3. Return team info                                    │
+└─────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────┐
+│                    team-execute                          │
+│  Promise.all([                                           │
+│    spawnAgentSession("security-auditor", task)          │
+│    spawnAgentSession("devil-s-advocate", task)          │
+│    ...                                                   │
+│  ])                                                      │
+│  Each: session.create() → session.prompt() → wait       │
+└─────────────────────────────────────────────────────────┘
+                         │
+                         ▼
+┌─────────────────────────────────────────────────────────┐
+│                    Results                               │
+│  - Aggregate all agent responses                        │
+│  - Store in team.results                                │
+│  - Return formatted output                               │
+└─────────────────────────────────────────────────────────┘
 ```
 
-## Example Output
+## Implementation Details
 
+### Real Session Spawning
+
+```typescript
+async function spawnAgentSession(agentName: string, task: string) {
+  // 1. Create real OpenCode session
+  const sessionResponse = await globalClient.session.create({});
+  const sessionID = sessionResponse.data.id;
+
+  // 2. Send prompt to agent
+  await globalClient.session.prompt({
+    path: { id: sessionID },
+    body: {
+      parts: [{ type: "text", text: task }],
+      agent: agentName,  // Uses agent from opencode.json
+      system: agentConfig?.prompt_append  // Custom system prompt
+    }
+  });
+
+  return { sessionID };
+}
 ```
-## Team "auth-review" Created
 
-**Team ID**: team-1708765432100
-**Preset**: review
+### Parallel Execution
 
-### Agents Spawned (3)
-- **code-reviewer** (Code Quality Specialist)
-- **security-auditor** (Security Specialist)
-- **devil-s-advocate** (Critical Thinker)
-
-### Task
-Review authentication code for security vulnerabilities
-
----
-
-## Discussion: SQL Injection Review
-
-### Round 1
-
-**security-auditor**:
-- **CRITICAL**: SQL Injection in line 14
-- **CRITICAL**: MD5 hashing (cryptographically broken)
-- **HIGH**: Weak token generation
-
-**code-reviewer**:
-- **HIGH**: No error handling
-- **MEDIUM**: Magic numbers used
-- Score: 2.5/10
-
-**devil-s-advocate**:
-### What Others Missed
-1. No email validation
-2. No password complexity requirements
-3. No session expiration
+```typescript
+const results = await Promise.all(
+  team.agents.map(agent => spawnAndExecute(agent, task))
+);
 ```
+
+### Error Handling
+
+- Consecutive error limit (5 max)
+- Per-agent timeout (90s default)
+- Detailed error messages
+
+### Memory Management
+
+- Maximum 50 teams stored
+- Auto-cleanup of oldest teams
+- Session deletion on shutdown
 
 ## Comparison with Claude Code
 
-| Feature | Claude Code | OpenCode Plugin |
-|---------|-------------|-----------------|
-| Team Creation | ✅ | ✅ |
-| Parallel Execution | ✅ | ✅ |
-| Devil's Advocate | ✅ | ✅ |
-| Inter-Agent Communication | ✅ | ✅ |
-| Natural Language | ✅ | ✅ |
+| Feature | Claude Code | This Plugin |
+|---------|-------------|-------------|
+| Team Creation | ✅ TeamCreate | ✅ team-spawn |
+| Parallel Execution | ✅ Promise.all | ✅ Promise.all |
+| Real Subagents | ✅ Task tool | ✅ session API |
+| Devil's Advocate | ✅ Required | ✅ In all presets |
+| Task Dependencies | ✅ blocks/blockedBy | ❌ Planned |
+| Message Protocol | ✅ SendMessage | ❌ Planned |
 
-## Development
+## Known Limitations
 
-```bash
-# Install dependencies
-bun install
+1. **Polling**: Uses polling instead of SSE (1.5s interval)
+2. **No Dependencies**: No blocks/blockedBy system yet
+3. **Session Isolation**: Each agent gets isolated session (no shared context)
 
-# Build
-bun run build
+## Future Work
 
-# Test
-opencode run "/team-spawn preset='review' teamName='test' task='test'"
-```
+- [ ] SSE-based completion detection
+- [ ] Task dependencies (blocks/blockedBy)
+- [ ] Inter-agent messaging
+- [ ] Progress streaming
+- [ ] oh-my-opencode `call_omo_agent` integration
 
 ## License
 
 MIT
-
-## Credits
-
-Developed for OpenCode platform compatibility with Claude Code's agent-teams system.

@@ -7,17 +7,94 @@ This is an OpenCode plugin that provides multi-agent team collaboration capabili
 ## Architecture
 
 ```
-plugins/agent-teams/
-├── src/
-│   └── index.ts      # Main plugin code
-├── package.json
-├── tsconfig.json
-└── README.md
+~/.config/opencode/
+├── opencode.json              # Main config with 30+ agent definitions
+├── agents/                    # Subagent markdown files (100+)
+│   └── *.md                   # YAML frontmatter + prompts
+├── skills/                    # Skill definitions
+└── plugins/
+    └── agent-teams/           # This plugin
+        ├── src/index.ts       # Main plugin code
+        └── dist/index.js      # Compiled output
 ```
 
-## Key Components
+## Agent Definition Sources
 
-### 1. Tools
+### 1. opencode.json (Primary - Used by Plugin)
+
+```json
+{
+  "agent": {
+    "debugger": {
+      "description": "Expert debugger specializing in...",
+      "model": "zai-coding-plan/glm-4.7",
+      "tools": {
+        "read": true,
+        "write": true,
+        "edit": true,
+        "bash": true,
+        "glob": true,
+        "grep": true,
+        "webfetch": true,
+        "websearch": true
+      },
+      "prompt_append": "You are an expert debugger..."
+    }
+  }
+}
+```
+
+### 2. agents/*.md (Subagent Definitions)
+
+```yaml
+---
+description: Expert debugger...
+mode: subagent
+model: zai-coding-plan/glm-4.7
+tools:
+  read: true
+  write: true
+  edit: true
+  bash: true
+  glob: true
+  grep: true
+permission:
+  bash:
+    '*': allow
+  edit: allow
+  write: allow
+---
+
+You are a senior debugging specialist...
+```
+
+**Note**: Plugin currently reads from `opencode.json`. To use agents from `agents/*.md`, they must be added to `opencode.json`.
+
+## Plugin Implementation
+
+### Agent Loading
+
+```typescript
+function loadOpenCodeAgents(): Record<string, { role: string; description: string }> {
+  const configPath = path.join(process.cwd(), "opencode.json");
+  const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+
+  const agents: Record<string, { role: string; description: string }> = {};
+
+  if (config.agent) {
+    for (const [name, def] of Object.entries(config.agent)) {
+      agents[name] = {
+        role: def.description?.split(".")[0] || name,
+        description: def.description || ""
+      };
+    }
+  }
+
+  return agents;
+}
+```
+
+### Tools
 
 | Tool | Description |
 |------|-------------|
@@ -27,26 +104,29 @@ plugins/agent-teams/
 | `team-shutdown` | Remove team |
 | `team-auto` | Natural language team request |
 
-### 2. State Management
+### State Management
 
 ```typescript
-interface Team {
-  id: string;
-  name: string;
-  agents: Map<string, Agent>;
-}
-
 interface Agent {
   name: string;
   sessionID: string;
   role: string;
   status: "idle" | "thinking" | "responding";
 }
+
+interface Team {
+  id: string;
+  name: string;
+  preset: string;
+  agents: Map<string, Agent>;
+  createdAt: Date;
+}
+
+const teams = new Map<string, Team>();
 ```
 
-### 3. Parallel Execution
+### Parallel Execution
 
-All agents execute in parallel using `Promise.all()`:
 ```typescript
 const results = await Promise.all(
   agents.map(agent => executeAgent(agent, prompt))
@@ -56,34 +136,61 @@ const results = await Promise.all(
 ## Presets
 
 ```typescript
-const PRESETS = {
+const PRESETS: Record<string, string[]> = {
   "review": ["code-reviewer", "security-auditor", "devil-s-advocate"],
   "security": ["security-auditor", "devil-s-advocate"],
   "debug": ["debugger", "devil-s-advocate"],
-  "feature": ["frontend-dev", "backend-dev", "test-automator", "devil-s-advocate"],
-  "architecture": ["architect", "devil-s-advocate"]
+  "planning": ["planner", "devil-s-advocate"],
+  "implementation": ["backend-developer", "frontend-developer", "test-automator", "devil-s-advocate"],
+  "fullstack": ["fullstack-developer", "devil-s-advocate"]
 };
 ```
 
-## Agent Prompts
+## Available Agents in opencode.json
 
-Each agent has a specialized prompt:
+| Category | Agents |
+|----------|--------|
+| **Core** | team-lead, devil-s-advocate, general-purpose |
+| **Development** | python-pro, typescript-pro, golang-pro, rust-engineer |
+| **Web** | frontend-developer, backend-developer, fullstack-developer, react-specialist, nextjs-developer |
+| **AI/ML** | ai-engineer, data-scientist, ml-engineer, llm-architect, prompt-engineer |
+| **DevOps** | devops-engineer, database-administrator, performance-engineer |
+| **Quality** | code-reviewer, security-auditor, debugger, test-automator, tdd-guide |
+| **Planning** | planner, refactoring-specialist, error-detective, explore |
+| **Special** | mcp-developer, api-designer, ui-designer |
 
-```typescript
-const AGENT_PROMPTS = {
-  "code-reviewer": {
-    role: "Code Quality Specialist",
-    prompt: "You are an expert code reviewer..."
-  },
-  "security-auditor": {
-    role: "Security Specialist",
-    prompt: "You are a security auditor..."
-  },
-  "devil-s-advocate": {
-    role: "Critical Thinker",
-    prompt: "You are the Devil's Advocate..."
+## Agent Permission Patterns
+
+### Full Access Agents
+```json
+{
+  "tools": {
+    "read": true, "write": true, "edit": true, "bash": true,
+    "glob": true, "grep": true, "webfetch": true, "websearch": true
   }
-};
+}
+```
+
+### Read-Only Review Agents
+```json
+{
+  "tools": {
+    "read": true, "glob": true, "grep": true, "bash": true,
+    "webfetch": true, "websearch": true,
+    "edit": false, "write": false
+  }
+}
+```
+
+### Devil's Advocate (Critical Reviewer)
+```json
+{
+  "tools": {
+    "read": true, "glob": true, "grep": true,
+    "webfetch": true, "websearch": true,
+    "write": false, "edit": false, "bash": false
+  }
+}
 ```
 
 ## Usage Patterns
@@ -101,25 +208,51 @@ Input: "이 코드를 팀을 짜서 보안 검토해줘"
 /team-discuss teamId="team-xxx" topic="SQL injection"
 ```
 
+## Compatibility with oh-my-opencode
+
+Both plugins can be used together:
+
+```json
+{
+  "plugin": [
+    "opencode-sessions",
+    "oh-my-opencode",
+    "./plugins/agent-teams"
+  ]
+}
+```
+
+| Plugin | Provides |
+|--------|----------|
+| **oh-my-opencode** | Oracle, Librarian, custom agents |
+| **agent-teams** | Multi-agent collaboration, presets |
+
+No conflicts - both work independently.
+
 ## Output Format
 
 ```
-## Team "name" Created
+## Team "name" Created 🔀
 
 **Team ID**: team-xxx
 **Preset**: review
+**Source**: OpenCode config
 
-### Agents
-- **agent-name** (Role)
+### Agents (N)
+- **agent-name** (Role) ✓  // ✓ = defined in opencode.json
 
-### Discussion
+### Task
+...
+
+---
+
+## Discussion
+
+### Round 1
 
 **agent-1**:
 - Finding 1
 - Finding 2
-
-**agent-2**:
-- Finding 1
 
 **devil-s-advocate**:
 ### What Others Missed
@@ -130,12 +263,19 @@ Input: "이 코드를 팀을 짜서 보안 검토해줘"
 
 - Invalid preset → Falls back to "review"
 - Missing teamId → Returns error message
-- Unknown agent → Uses generic agent with name as role
+- Unknown agent → Uses generic agent with name as role, logs warning
 
 ## Dependencies
 
-- `@opencode-ai/plugin`: OpenCode plugin SDK
-- `zod`: Schema validation (via `tool.schema`)
+```json
+{
+  "dependencies": {
+    "@opencode-ai/plugin": "^1.1.60",
+    "@opencode-ai/sdk": "^1.1.60",
+    "zod": "^4.1.8"
+  }
+}
+```
 
 ## Build
 
@@ -144,18 +284,41 @@ bun install
 bun run build  # Outputs to dist/index.js
 ```
 
-## Configuration
-
-Add to `opencode.json`:
-```json
-{
-  "plugin": ["./plugins/agent-teams"]
-}
-```
-
 ## Key Constraints
 
 1. **Devil's Advocate Required**: Every preset includes devil-s-advocate
-2. **Max Team Size**: 10 agents (configurable)
+2. **Max Team Size**: No hard limit (configurable)
 3. **Memory-Based State**: Teams stored in Map, not persisted
 4. **Zod Compatibility**: Must use `tool.schema` for type safety
+
+## Extending the Plugin
+
+### Add New Agent to opencode.json
+```json
+{
+  "agent": {
+    "my-agent": {
+      "description": "Custom agent description",
+      "model": "zai-coding-plan/glm-4.7",
+      "tools": { "read": true, "write": true }
+    }
+  }
+}
+```
+
+### Add New Preset
+```typescript
+// In src/index.ts
+const PRESETS: Record<string, string[]> = {
+  // ...existing
+  "my-preset": ["my-agent", "devil-s-advocate"]
+};
+```
+
+## Future Enhancements
+
+- [ ] Load agents from `agents/*.md` files
+- [ ] Task dependencies (blocks/blockedBy)
+- [ ] Message protocol between agents
+- [ ] Persistent team state
+- [ ] Agent status tracking (thinking/responding)

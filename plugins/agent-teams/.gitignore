@@ -1,3 +1,16 @@
 node_modules/
-dist/
 *.lock
+*.log
+.DS_Store
+.env
+.env.*
+*.bak
+*.tmp
+
+# IDE
+.vscode/
+.idea/
+
+# Test outputs
+test-results/
+coverage/
