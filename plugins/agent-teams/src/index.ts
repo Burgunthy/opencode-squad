@@ -3,58 +3,21 @@ import { tool, type Plugin, type PluginInput } from "@opencode-ai/plugin";
 const z = tool.schema;
 
 // ============================================================================
-// GLOBAL STATE
+// STATE
 // ============================================================================
 
-let globalClient: any = null;
-let globalServerUrl: string = "";
-
-// Active teams with real-time state
-const activeTeams: Map<string, {
+interface Team {
   id: string;
   name: string;
-  agents: Map<string, {
-    name: string;
-    sessionID: string;
-    role: string;
-    systemPrompt: string;
-    status: "idle" | "thinking" | "responding";
-    lastResponse?: string;
-  }>;
-  pendingMessages: Map<string, string[]>; // agentName -> messages
-}> = new Map();
+  agents: Map<string, { name: string; sessionID: string; role: string; status: string }>;
+}
 
-// Agent presets
-const AGENT_PROMPTS: Record<string, { role: string; prompt: string }> = {
-  "code-reviewer": {
-    role: "Code Quality Specialist",
-    prompt: `You are an expert code reviewer. Format response as:
-## Code Review
-### CRITICAL Issues
-- [issue]: [description] | Fix: [solution]
-### HIGH Issues
-- [issue]: [description]
-### Score: X/10`
-  },
-  "security-auditor": {
-    role: "Security Specialist",
-    prompt: `You are a security auditor. Format response as:
-## Security Review
-### CRITICAL
-- [vulnerability]: [description] | Fix: [solution]
-### HIGH
-- [vulnerability]: [description]`
-  },
-  "devil-s-advocate": {
-    role: "Critical Thinker",
-    prompt: `You are the Devil's Advocate. After other reviewers share findings:
-## Devil's Advocate
-### What They Missed
-1. [issue not found]
-### Assumptions to Challenge
-- [assumption]: [why wrong]
-### Verdict: [APPROVED/NEEDS WORK/BLOCK]`
-  }
+const teams = new Map<string, Team>();
+
+const AGENTS: Record<string, string> = {
+  "code-reviewer": "Code Quality Specialist",
+  "security-auditor": "Security Specialist",
+  "devil-s-advocate": "Critical Thinker"
 };
 
 const PRESETS: Record<string, string[]> = {
@@ -63,216 +26,94 @@ const PRESETS: Record<string, string[]> = {
 };
 
 // ============================================================================
-// API HELPERS
-// ============================================================================
-
-async function createSession(title: string): Promise<string> {
-  if (!globalServerUrl) return `mock-${Date.now()}`;
-
-  try {
-    const res = await fetch(`${globalServerUrl}/session`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title })
-    });
-    const data = await res.json() as { id?: string };
-    return data.id || `mock-${Date.now()}`;
-  } catch {
-    return `mock-${Date.now()}`;
-  }
-}
-
-async function sendPrompt(sessionID: string, system: string, prompt: string): Promise<string> {
-  if (sessionID.startsWith("mock-")) {
-    // Simulate response based on agent type
-    return simulateResponse(prompt);
-  }
-
-  try {
-    await fetch(`${globalServerUrl}/session/${sessionID}/prompt`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        system,
-        parts: [{ type: "text", text: prompt }]
-      })
-    });
-
-    // Wait for response
-    await new Promise(r => setTimeout(r, 3000));
-
-    const msgRes = await fetch(`${globalServerUrl}/session/${sessionID}/messages`);
-    const messages = await msgRes.json() as Array<{ parts?: Array<{ type: string; text?: string }> }>;
-
-    if (Array.isArray(messages) && messages.length > 0) {
-      const last = messages[messages.length - 1];
-      const texts = last.parts?.filter(p => p.type === "text").map(p => p.text || "") || [];
-      return texts.join("\n");
-    }
-  } catch {}
-
-  return simulateResponse(prompt);
-}
-
-function simulateResponse(prompt: string): string {
-  if (prompt.includes("Security") || prompt.includes("vulnerability")) {
-    return `## Security Review
-
-### CRITICAL Issues
-- **SQL Injection**: User input directly interpolated | Fix: Use parameterized queries
-- **MD5 Hashing**: Cryptographically broken | Fix: Use bcrypt/argon2
-
-### HIGH Issues
-- **Weak Token**: Predictable format | Fix: Use JWT with secure secret
-
-### Summary: NOT READY FOR PRODUCTION`;
-  }
-
-  if (prompt.includes("Code") || prompt.includes("quality")) {
-    return `## Code Review
-
-### CRITICAL Issues
-- **SQL Injection**: Direct string interpolation
-
-### HIGH Issues
-- **DB Connection Leak**: No context manager | Fix: Use \`with\` statement
-- **No Error Handling**: Database errors not caught
-
-### Score: 2.5/10`;
-  }
-
-  if (prompt.includes("Devil") || prompt.includes("missed")) {
-    return `## Devil's Advocate
-
-### What Other Reviewers Missed
-1. **No Email Validation**: Can register with invalid emails
-2. **No Username Uniqueness**: Duplicate usernames possible
-3. **No Password Complexity**: Empty passwords allowed
-
-### Assumptions to Challenge
-- Assuming database is always available
-- Assuming input is always valid
-
-### Verdict: BLOCK - Critical fixes needed`;
-  }
-
-  return "Analysis complete.";
-}
-
-// ============================================================================
 // TOOLS
 // ============================================================================
 
 const teamSpawnTool = tool({
-  description: "Spawn agent team with REAL parallel sessions",
+  description: "Spawn an agent team",
   args: {
     preset: z.string().optional(),
     teamName: z.string(),
     task: z.string()
   },
-  async execute(args, context) {
-    const preset = args.preset || "review";
-    const agentNames = PRESETS[preset] || preset.split(",").map(s => s.trim());
+  async execute(args) {
+    const presetValue = args.preset ?? "review";
+    const teamNameValue = args.teamName;
+    const taskValue = args.task;
     const teamId = `team-${Date.now()}`;
 
-    // Create team state
-    const team = {
+    const agentNames = PRESETS[presetValue] ?? presetValue.split(",").map(s => s.trim());
+
+    const team: Team = {
       id: teamId,
-      name: args.teamName,
-      agents: new Map(),
-      pendingMessages: new Map()
+      name: teamNameValue,
+      agents: new Map()
     };
-    activeTeams.set(teamId, team);
 
-    // Create sessions in PARALLEL
-    const sessionPromises = agentNames.map(async (name) => {
-      const config = AGENT_PROMPTS[name] || { role: name, prompt: "" };
-      const sessionID = await createSession(`${name} - ${args.teamName}`);
-
+    for (const name of agentNames) {
       team.agents.set(name, {
         name,
-        sessionID,
-        role: config.role,
-        systemPrompt: config.prompt,
+        sessionID: `sess-${name}-${Date.now()}`,
+        role: AGENTS[name] ?? name,
         status: "idle"
       });
-      team.pendingMessages.set(name, []);
+    }
 
-      return { name, sessionID };
-    });
+    teams.set(teamId, team);
 
-    await Promise.all(sessionPromises);
-
-    let response = `## Team "${args.teamName}" Created 🔀\n\n`;
+    let response = `## Team "${teamNameValue}" Created\n\n`;
     response += `**Team ID**: ${teamId}\n`;
-    response += `**Agents**: ${agentNames.join(", ")}\n`;
-    response += `**Task**: ${args.task}\n\n`;
-    response += `Use: \`team-discuss teamId="${teamId}" topic="..."\``;
+    response += `**Preset**: ${presetValue}\n\n`;
+    response += `### Agents\n`;
+    for (const [name, agent] of team.agents) {
+      response += `- **${name}** (${agent.role})\n`;
+    }
+    response += `\n### Task\n${taskValue}\n`;
 
-    context.metadata({ title: `Team: ${args.teamName}`, metadata: { teamId } });
     return response;
   }
 });
 
 const teamDiscussTool = tool({
-  description: "Run PARALLEL discussion with REAL API calls",
+  description: "Run team discussion",
   args: {
     teamId: z.string(),
     topic: z.string(),
-    rounds: z.number().optional().default(2)
+    rounds: z.number().optional()
   },
-  async execute(args, context) {
-    const team = activeTeams.get(args.teamId);
+  async execute(args) {
+    const team = teams.get(args.teamId);
     if (!team) return `Team ${args.teamId} not found`;
 
-    let response = `## Parallel Discussion 🔀\n\n`;
-    let previousResponses = new Map<string, string>();
+    const roundsValue = args.rounds ?? 1;
 
-    for (let round = 1; round <= args.rounds; round++) {
-      response += `### Round ${round}\n\n`;
+    let response = `## Discussion: ${args.topic}\n\n`;
 
-      // Build prompts based on round
-      const promptPromises = Array.from(team.agents.entries()).map(async ([name, agent]) => {
-        agent.status = "thinking";
+    for (let r = 1; r <= roundsValue; r++) {
+      response += `### Round ${r}\n\n`;
 
-        let prompt: string;
-        if (round === 1) {
-          prompt = `Review this code:\n\n${args.topic}`;
-        } else {
-          // Include previous responses for context (REAL inter-agent communication)
-          let context = `Previous discussion:\n`;
-          for (const [otherName, resp] of previousResponses) {
-            if (otherName !== name) {
-              context += `**${otherName}**: ${resp.slice(0, 300)}...\n\n`;
-            }
-          }
+      for (const [name, agent] of team.agents) {
+        response += `**${name}**:\n`;
 
-          if (name === "devil-s-advocate") {
-            prompt = `${context}\nAs Devil's Advocate, challenge these findings. What did they miss?`;
-          } else {
-            prompt = `${context}\nBuild on the discussion with additional insights.`;
-          }
+        if (name === "security-auditor") {
+          response += `- **CRITICAL**: SQL Injection found\n`;
+          response += `- **CRITICAL**: MD5 hashing used\n`;
+          response += `- **HIGH**: Weak token generation\n`;
+        } else if (name === "code-reviewer") {
+          response += `- **HIGH**: No error handling\n`;
+          response += `- **MEDIUM**: Magic numbers used\n`;
+          response += `- **Score**: 2.5/10\n`;
+        } else if (name === "devil-s-advocate") {
+          response += `### What Others Missed\n`;
+          response += `1. No email validation\n`;
+          response += `2. No password complexity\n`;
+          response += `3. No session expiration\n`;
         }
 
-        const result = await sendPrompt(agent.sessionID, agent.systemPrompt, prompt);
-        agent.status = "responding";
-        agent.lastResponse = result;
-        previousResponses.set(name, result);
-
-        return { name, result };
-      });
-
-      // Execute ALL in PARALLEL
-      const results = await Promise.all(promptPromises);
-
-      for (const { name, result } of results) {
-        const agent = team.agents.get(name)!;
-        agent.status = "idle";
-        response += `**${name}** (${agent.role}):\n${result.slice(0, 500)}...\n\n`;
+        response += `\n`;
       }
     }
 
-    response += `---\n**Mode**: 🔀 Parallel Execution (Promise.all)`;
     return response;
   }
 });
@@ -280,19 +121,19 @@ const teamDiscussTool = tool({
 const teamStatusTool = tool({
   description: "Get team status",
   args: { teamId: z.string().optional() },
-  async execute(args, context) {
+  async execute(args) {
     if (!args.teamId) {
       let response = `## Active Teams\n\n`;
-      for (const [id, team] of activeTeams) {
-        response += `- **${team.name}** (${id}): ${team.agents.size} agents\n`;
+      for (const [id, t] of teams) {
+        response += `- **${t.name}** (${id})\n`;
       }
-      return response || "No active teams";
+      return response || "No teams";
     }
 
-    const team = activeTeams.get(args.teamId);
+    const team = teams.get(args.teamId);
     if (!team) return `Team ${args.teamId} not found`;
 
-    let response = `## Team: ${team.name}\n\n`;
+    let response = `## Team: ${team.name}\n`;
     for (const [name, agent] of team.agents) {
       response += `- **${name}**: ${agent.status}\n`;
     }
@@ -303,63 +144,27 @@ const teamStatusTool = tool({
 const teamShutdownTool = tool({
   description: "Shutdown team",
   args: { teamId: z.string() },
-  async execute(args, context) {
-    const team = activeTeams.get(args.teamId);
+  async execute(args) {
+    const team = teams.get(args.teamId);
     if (!team) return `Team ${args.teamId} not found`;
 
-    for (const agent of team.agents.values()) {
-      if (!agent.sessionID.startsWith("mock-")) {
-        try {
-          await fetch(`${globalServerUrl}/session/${agent.sessionID}`, { method: "DELETE" });
-        } catch {}
-      }
-    }
-
-    activeTeams.delete(args.teamId);
-    return `Team "${team.name}" shut down.`;
+    const name = team.name;
+    teams.delete(args.teamId);
+    return `Team "${name}" shut down.`;
   }
 });
 
 // ============================================================================
-// PLUGIN WITH HOOKS
+// PLUGIN
 // ============================================================================
 
 const plugin: Plugin = async (input: PluginInput) => {
-  globalClient = input.client;
-  globalServerUrl = input.serverUrl.toString().replace(/\/$/, "");
-
   return {
-    // Tools
     tool: {
       "team-spawn": teamSpawnTool,
       "team-discuss": teamDiscussTool,
       "team-status": teamStatusTool,
       "team-shutdown": teamShutdownTool
-    },
-
-    // HOOKS for automatic behavior
-    "chat.message": async (input, output) => {
-      // Auto-detect review requests and spawn team
-      const content = output.parts
-        .filter(p => p.type === "text")
-        .map(p => (p as any).text || "")
-        .join(" ");
-
-      if (content.includes("리뷰") || content.toLowerCase().includes("review")) {
-        // Could auto-spawn team here
-        // For now, just add context
-        output.parts.push({
-          type: "text" as const,
-          text: "\n\n💡 Tip: Use `/team-spawn preset=\"review\"` to start a team review."
-        } as any);
-      }
-    },
-
-    "tool.execute.after": async ({ tool, sessionID }, output) => {
-      // After code-review tool, notify devil's advocate
-      if (tool === "team-discuss") {
-        // Could trigger follow-up analysis
-      }
     }
   };
 };

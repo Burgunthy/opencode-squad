@@ -1,0 +1,6 @@
+{
+  "name": "@opencode-ai/plugin-instructions-workflow",
+  "version": "1.0.0",
+  "description": "Complete team workflow with opencode-sessions integration",
+  "main": "agent-workflow.js"
+}

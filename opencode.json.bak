@@ -1,0 +1,40 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "plugin": [
+    "opencode-sessions"
+  ],
+  "model": "zai-coding-plan/glm-4.7",
+  "small_model": "zai-coding-plan/glm-4.5-flash",
+  "permission": {
+    "edit": "allow",
+    "bash": {
+      "*": "allow"
+    },
+    "webfetch": "allow",
+    "websearch": "allow"
+  },
+  "command": {
+    "review": {
+      "template": "Review code changes in $ARGUMENTS for best practices, security, and performance issues.",
+      "description": "Code review",
+      "agent": "code-reviewer"
+    },
+    "commit": {
+      "template": "Create a well-structured git commit for current staged changes. Write a clear commit message following conventional commits.",
+      "description": "Smart commit"
+    },
+    "debug": {
+      "template": "Debug following issue: $ARGUMENTS. Use systematic debugging methodology.",
+      "description": "Debug an issue",
+      "agent": "debugger"
+    },
+    "test": {
+      "template": "Run test suite and analyze failures. Suggest fixes for failing tests. $ARGUMENTS",
+      "description": "Run and analyze tests"
+    },
+    "plan": {
+      "template": "Create an implementation plan for: $ARGUMENTS. Analyze requirements, identify files, and propose step-by-step approach.",
+      "description": "Create implementation plan"
+    }
+  }
+}
