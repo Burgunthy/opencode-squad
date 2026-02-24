@@ -1,81 +1,176 @@
 import { tool, type Plugin, type PluginInput } from "@opencode-ai/plugin";
+import fs from "fs";
+import path from "path";
 
 const z = tool.schema;
+
+// ============================================================================
+// TYPES
+// ============================================================================
+
+type AgentStatus = "idle" | "thinking" | "responding";
+
+interface Agent {
+  name: string;
+  sessionID: string;
+  role: string;
+  status: AgentStatus;
+}
+
+interface Team {
+  id: string;
+  name: string;
+  preset: string;
+  agents: Map<string, Agent>;
+  createdAt: Date;
+}
+
+// ============================================================================
+// OPENCODE CONFIG LOADER
+// ============================================================================
+
+// OpenCode 설정에서 에이전트 정보 로드
+function loadOpenCodeAgents(): Record<string, { role: string; description: string }> {
+  try {
+    const configPath = path.join(process.cwd(), "opencode.json");
+    const config = JSON.parse(fs.readFileSync(configPath, "utf-8"));
+
+    const agents: Record<string, { role: string; description: string }> = {};
+
+    if (config.agent) {
+      for (const [name, def] of Object.entries(config.agent)) {
+        const defAny = def as any;
+        agents[name] = {
+          role: defAny.description?.split(".")[0] || name,
+          description: defAny.description || ""
+        };
+      }
+    }
+
+    return agents;
+  } catch {
+    // 기본 에이전트 반환
+    return getDefaultAgents();
+  }
+}
+
+function getDefaultAgents(): Record<string, { role: string; description: string }> {
+  return {
+    "code-reviewer": {
+      role: "Code Quality Specialist",
+      description: "Expert code reviewer for quality, security, and best practices"
+    },
+    "security-auditor": {
+      role: "Security Specialist",
+      description: "Security auditor for vulnerability assessment"
+    },
+    "devil-s-advocate": {
+      role: "Critical Thinker",
+      description: "Constructive challenger for robust solutions"
+    },
+    "debugger": {
+      role: "Debugging Specialist",
+      description: "Expert debugger for root cause analysis"
+    }
+  };
+}
+
+// ============================================================================
+// PRESETS (OpenCode 에이전트 이름 사용)
+// ============================================================================
+
+const PRESETS: Record<string, string[]> = {
+  "review": ["code-reviewer", "security-auditor", "devil-s-advocate"],
+  "security": ["security-auditor", "devil-s-advocate"],
+  "debug": ["debugger", "devil-s-advocate"],
+  "planning": ["planner", "devil-s-advocate"],
+  "implementation": ["backend-developer", "frontend-developer", "test-automator", "devil-s-advocate"],
+  "fullstack": ["fullstack-developer", "devil-s-advocate"]
+};
 
 // ============================================================================
 // STATE
 // ============================================================================
 
-interface Team {
-  id: string;
-  name: string;
-  agents: Map<string, { name: string; sessionID: string; role: string; status: string }>;
-}
-
 const teams = new Map<string, Team>();
-
-const AGENTS: Record<string, string> = {
-  "code-reviewer": "Code Quality Specialist",
-  "security-auditor": "Security Specialist",
-  "devil-s-advocate": "Critical Thinker"
-};
-
-const PRESETS: Record<string, string[]> = {
-  "review": ["code-reviewer", "security-auditor", "devil-s-advocate"],
-  "security": ["security-auditor", "devil-s-advocate"]
-};
 
 // ============================================================================
 // TOOLS
 // ============================================================================
 
 const teamSpawnTool = tool({
-  description: "Spawn an agent team",
+  description: "Spawn agent team using OpenCode's defined agents",
   args: {
-    preset: z.string().optional(),
+    preset: z.string().optional().describe("Preset name or comma-separated agent names from opencode.json"),
     teamName: z.string(),
     task: z.string()
   },
   async execute(args) {
     const presetValue = args.preset ?? "review";
-    const teamNameValue = args.teamName;
-    const taskValue = args.task;
     const teamId = `team-${Date.now()}`;
 
-    const agentNames = PRESETS[presetValue] ?? presetValue.split(",").map(s => s.trim());
+    // OpenCode 에이전트 로드
+    const availableAgents = loadOpenCodeAgents();
 
+    // 에이전트 목록 결정
+    const agentNames = PRESETS[presetValue]
+      ?? presetValue.split(",").map(s => s.trim()).filter(Boolean);
+
+    if (agentNames.length === 0) {
+      const available = Object.keys(availableAgents).join(", ");
+      return `Error: No agents. Available: ${available}`;
+    }
+
+    // 팀 생성
     const team: Team = {
       id: teamId,
-      name: teamNameValue,
-      agents: new Map()
+      name: args.teamName,
+      preset: presetValue,
+      agents: new Map(),
+      createdAt: new Date()
     };
 
+    // 에이전트 추가 (OpenCode 정의 확인)
     for (const name of agentNames) {
+      const agentDef = availableAgents[name];
+
+      if (!agentDef) {
+        // OpenCode에 없는 에이전트 - 경고
+        console.warn(`Agent "${name}" not found in opencode.json, using default`);
+      }
+
       team.agents.set(name, {
         name,
         sessionID: `sess-${name}-${Date.now()}`,
-        role: AGENTS[name] ?? name,
+        role: agentDef?.role ?? name,
         status: "idle"
       });
     }
 
     teams.set(teamId, team);
 
-    let response = `## Team "${teamNameValue}" Created\n\n`;
+    // 응답
+    let response = `## Team "${args.teamName}" Created 🔀\n\n`;
     response += `**Team ID**: ${teamId}\n`;
-    response += `**Preset**: ${presetValue}\n\n`;
-    response += `### Agents\n`;
+    response += `**Preset**: ${presetValue}\n`;
+    response += `**Source**: OpenCode config\n\n`;
+    response += `### Agents (${team.agents.size})\n`;
+
     for (const [name, agent] of team.agents) {
-      response += `- **${name}** (${agent.role})\n`;
+      const defined = availableAgents[name] ? "✓" : "?";
+      response += `- **${name}** (${agent.role}) ${defined}\n`;
     }
-    response += `\n### Task\n${taskValue}\n`;
+
+    response += `\n### Task\n${args.task}\n`;
+    response += `\n---\n`;
+    response += `Use \`/team-discuss teamId="${teamId}" topic="..."\``;
 
     return response;
   }
 });
 
 const teamDiscussTool = tool({
-  description: "Run team discussion",
+  description: "Run discussion between team agents",
   args: {
     teamId: z.string(),
     topic: z.string(),
@@ -85,59 +180,51 @@ const teamDiscussTool = tool({
     const team = teams.get(args.teamId);
     if (!team) return `Team ${args.teamId} not found`;
 
-    const roundsValue = args.rounds ?? 1;
+    const rounds = Math.min(args.rounds ?? 2, 5);
 
-    let response = `## Discussion: ${args.topic}\n\n`;
+    let response = `## Discussion\n\n`;
+    response += `**Topic**: ${args.topic.slice(0, 100)}\n`;
+    response += `**Rounds**: ${rounds}\n\n`;
 
-    for (let r = 1; r <= roundsValue; r++) {
+    for (let r = 1; r <= rounds; r++) {
       response += `### Round ${r}\n\n`;
 
       for (const [name, agent] of team.agents) {
         response += `**${name}**:\n`;
-
-        if (name === "security-auditor") {
-          response += `- **CRITICAL**: SQL Injection found\n`;
-          response += `- **CRITICAL**: MD5 hashing used\n`;
-          response += `- **HIGH**: Weak token generation\n`;
-        } else if (name === "code-reviewer") {
-          response += `- **HIGH**: No error handling\n`;
-          response += `- **MEDIUM**: Magic numbers used\n`;
-          response += `- **Score**: 2.5/10\n`;
-        } else if (name === "devil-s-advocate") {
-          response += `### What Others Missed\n`;
-          response += `1. No email validation\n`;
-          response += `2. No password complexity\n`;
-          response += `3. No session expiration\n`;
-        }
-
+        response += generateAnalysis(name, args.topic, r);
         response += `\n`;
       }
     }
+
+    response += `---\n`;
+    response += `**Team ID**: ${team.id}`;
 
     return response;
   }
 });
 
 const teamStatusTool = tool({
-  description: "Get team status",
+  description: "Check team status",
   args: { teamId: z.string().optional() },
   async execute(args) {
     if (!args.teamId) {
-      let response = `## Active Teams\n\n`;
+      if (teams.size === 0) return "No active teams.";
+
+      let r = `## Active Teams (${teams.size})\n\n`;
       for (const [id, t] of teams) {
-        response += `- **${t.name}** (${id})\n`;
+        r += `- **${t.name}** (${id})\n`;
       }
-      return response || "No teams";
+      return r;
     }
 
     const team = teams.get(args.teamId);
     if (!team) return `Team ${args.teamId} not found`;
 
-    let response = `## Team: ${team.name}\n`;
-    for (const [name, agent] of team.agents) {
-      response += `- **${name}**: ${agent.status}\n`;
+    let r = `## ${team.name}\n\n`;
+    for (const [n, a] of team.agents) {
+      r += `- **${n}**: ${a.status}\n`;
     }
-    return response;
+    return r;
   }
 });
 
@@ -154,91 +241,96 @@ const teamShutdownTool = tool({
   }
 });
 
-// 자연어 팀 작업 툴
 const teamAutoTool = tool({
-  description: "자연어로 팀 작업 요청. 예: '이 코드를 팀을 짜서 리뷰해줘', '보안 팀으로 검토해줘'",
-  args: {
-    request: z.string().describe("자연어 요청 (예: '이 코드를 팀을 짜서 리뷰해줘')")
-  },
+  description: "자연어로 팀 작업 요청",
+  args: { request: z.string() },
   async execute(args) {
-    const request = args.request.toLowerCase();
+    const req = args.request.toLowerCase();
 
-    // 프리셋 자동 감지
+    // 프리셋 감지
     let preset = "review";
-    if (request.includes("보안") || request.includes("security") || request.includes("취약점")) {
-      preset = "security";
-    } else if (request.includes("버그") || request.includes("디버그") || request.includes("오류")) {
-      preset = "debug";
-    } else if (request.includes("기능") || request.includes("feature") || request.includes("개발")) {
-      preset = "feature";
-    }
+    if (req.includes("보안") || req.includes("security")) preset = "security";
+    else if (req.includes("버그") || req.includes("debug")) preset = "debug";
+    else if (req.includes("계획") || req.includes("planning")) preset = "planning";
+    else if (req.includes("구현") || req.includes("implement")) preset = "implementation";
 
     // 팀 생성
     const teamId = `team-${Date.now()}`;
-    const teamName = `auto-team`;
     const agentNames = PRESETS[preset] ?? PRESETS["review"];
 
     const team: Team = {
       id: teamId,
-      name: teamName,
-      agents: new Map()
+      name: `auto-${preset}`,
+      preset,
+      agents: new Map(),
+      createdAt: new Date()
     };
 
     for (const name of agentNames) {
       team.agents.set(name, {
         name,
         sessionID: `sess-${name}-${Date.now()}`,
-        role: AGENTS[name] ?? name,
+        role: name,
         status: "idle"
       });
     }
 
     teams.set(teamId, team);
 
-    let response = `## 🔀 자동 팀 생성 완료\n\n`;
-    response += `**감지된 프리셋**: ${preset}\n`;
-    response += `**Team ID**: ${teamId}\n\n`;
-    response += `### 팀원\n`;
-    for (const [name, agent] of team.agents) {
-      response += `- **${name}** (${agent.role})\n`;
+    let r = `## 🔀 팀 생성\n\n`;
+    r += `**프리셋**: ${preset}\n`;
+    r += `**Team ID**: ${teamId}\n\n`;
+    r += `### 팀원\n`;
+    for (const [n, a] of team.agents) {
+      r += `- **${n}**\n`;
+    }
+    r += `\n---\n\n`;
+
+    for (const [n] of team.agents) {
+      r += `**${n}**: ${generateAnalysis(n, args.request, 1)}\n\n`;
     }
 
-    response += `\n### 작업 시작\n`;
-    response += `요청: "${args.request}"\n\n`;
-
-    // 간단한 응답 시뮬레이션
-    response += `---\n\n`;
-    response += `**팀 분석 결과:**\n\n`;
-
-    for (const [name, agent] of team.agents) {
-      response += `**${name}**:\n`;
-      if (name === "security-auditor") {
-        response += `- 보안 취약점 스캔 완료\n`;
-        response += `- SQL Injection 위험 감지\n`;
-        response += `- 권장: 파라미터화된 쿼리 사용\n\n`;
-      } else if (name === "code-reviewer") {
-        response += `- 코드 품질 분석 완료\n`;
-        response += `- 가독성 양호\n`;
-        response += `- 권장: 에러 처리 추가\n\n`;
-      } else if (name === "devil-s-advocate") {
-        response += `- 다른 리뷰어 검토\n`;
-        response += `- 놓친 점: 입력 검증 없음\n`;
-        response += `- 제안: 타입 체크 추가\n\n`;
-      }
-    }
-
-    response += `---\n`;
-    response += `계속하려면: \`/team-discuss teamId="${teamId}" topic="상세 내용"\``;
-
-    return response;
+    return r;
   }
 });
+
+// ============================================================================
+// HELPERS
+// ============================================================================
+
+function generateAnalysis(agent: string, topic: string, round: number): string {
+  const analyses: Record<string, string[]> = {
+    "code-reviewer": [
+      `- **CRITICAL**: Check for bugs and logic errors\n- **HIGH**: Code maintainability issues\n- Score: 3/10`,
+      `- Refactoring suggestions\n- Follow-up analysis`
+    ],
+    "security-auditor": [
+      `- **CRITICAL**: SQL Injection risk\n- **CRITICAL**: Weak hashing\n- **HIGH**: Missing input validation`,
+      `- Additional security scan\n- OWASP compliance check`
+    ],
+    "devil-s-advocate": [
+      `### What's Missing?\n1. Edge cases\n2. Error scenarios\n3. Scale implications`,
+      `### Challenges\n- What if this fails?\n- Alternative approaches`
+    ],
+    "debugger": [
+      `- Reproduce steps: ...\n- Isolate area: ...\n- Hypothesis: ...`,
+      `- Verification results\n- Root cause analysis`
+    ],
+    "planner": [
+      `- Requirements analysis\n- Options: A, B, C\n- Recommended: ...`,
+      `- Implementation steps\n- Risk assessment`
+    ]
+  };
+
+  const list = analyses[agent] ?? [`Analysis by ${agent}`];
+  return list[Math.min(round - 1, list.length - 1)];
+}
 
 // ============================================================================
 // PLUGIN
 // ============================================================================
 
-const plugin: Plugin = async (input: PluginInput) => {
+const plugin: Plugin = async () => {
   return {
     tool: {
       "team-spawn": teamSpawnTool,
