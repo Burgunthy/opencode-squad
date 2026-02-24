@@ -92,6 +92,41 @@ interface Message {
   read?: boolean;
 }
 
+// ============================================================================
+// DIFFERENTIATION TYPES (차별화 기능 타입)
+// ============================================================================
+
+interface TeamVote {
+  agentName: string;
+  vote: "approve" | "reject" | "abstain";
+  reason?: string;
+}
+
+interface ScoreResult {
+  agentName: string;
+  score: number;
+  feedback: string;
+  timestamp: Date;
+}
+
+// Agent Handoff - 에이전트 간 작업 위임
+interface HandoffRequest {
+  fromAgent: string;
+  toAgent: string;
+  task: string;
+  reason: string;
+  timestamp: Date;
+}
+
+// Conflict Resolution - 구조화된 토론 형식
+interface ConflictPoint {
+  topic: string;
+  agents: string[];
+  positions: string[];
+  timestamp: Date;
+  resolved?: boolean;
+}
+
 interface Plan {
   id: string;
   agentId: string;
@@ -144,13 +179,180 @@ const DEVILS_ADVOCATE_PROMPT = `
 반드시 비판적이어야 합니다. 무조건적인 승인은 금지입니다.
 `;
 
-// Devil's Advocate 이름 매칭 (여러 변형 지원)
+// ============================================================================
+// KOREAN-OPTIMIZED PROMPTS (차별화 기능 1: 한국어 최적화)
+// ============================================================================
+
+const KOREAN_REVIEW_PROMPT = `
+당신은 한국어 최적화 코드 리뷰어입니다.
+
+## 역할
+- **전문가 수준의 코드 분석**: 한국어로 상세하고 명확한 리뷰 제공
+- **구체적 개선 제안**: "이 부분을 고치세요" 대신 "이 부분을 X 방식으로 개선하면 Y 이유로 더 좋습니다"와 같이 구체적으로
+- **우선순위 표시**: 🔴 심각한 문제, 🟡 개선 제안, 🔵 스타일 제안
+
+## 출력 형식 (한국어)
+### 📋 리뷰 요약
+[한 문장 요약]
+
+### 🔴 심각한 문제 (Critical)
+- **위치**: 파일:행
+- **문제**: [설명]
+- **해결방안**: [구체적 코드 수정 제안]
+
+### 🟡 개선 제안 (Improvement)
+- **위치**: 파일:행
+- **제안**: [설명]
+- **이유**: [왜 더 나은지]
+
+### 🔵 스타일 (Style)
+- [설명]
+
+### ✅ 장점
+- [잘 된 부분 인정]
+
+모든 출력은 한국어로 작성하세요.
+`;
+
+const KOREAN_DEBATE_PROMPT = `
+당신은 토론 전문가입니다. 건설적인 토론을 이끌어주세요.
+
+## 토론 원칙
+1. **논리적 근거**: 모든 주장에 근거 제시
+2. **상호 존중**: 타 에이전트 의견 존중
+3. **사실 중심**: 개인적 의견보다 사실 위주
+
+## 한국어 토론 형식
+### 🎯 내 입장
+[한 문장으로 요약]
+
+### 📊 근거
+1. [첫 번째 근거]
+2. [두 번째 근거]
+
+### 🔄 다른 의견에 대한 답변
+[다른 에이전트 의견에 대한 반론/수용]
+
+### 💎 결론
+[최종 요약]
+
+모든 출력은 한국어로 작성하세요.
+`;
+
+const SUMMARY_BOT_PROMPT = `
+당신은 종합 보고서 작성 전문가입니다.
+
+## 역할
+모든 에이전트의 의견과 토론을 분석하여, 객관적이고 균형 잡힌 종합 보고서를 작성하세요.
+
+## 보고서 구조 (한국어)
+### 📌 결론 요약
+[모든 에이전트 합의사항 또는 최종 결론]
+
+### 📊 에이전트별 주요 의견
+| 에이전트 | 주장 | 요약 |
+|---------|------|------|
+| [이름] | [주장] | [한 줄 요약] |
+
+### 🔍 합의된 사항
+- [모두가 동의한 사항]
+
+### 💭 논의된 사항 (합의 미달)
+- [의견이 나뉜 사항과 각 입장]
+
+### ⚠️ 발견된 위험/문제점
+| 위험도 | 문제 | 제안된 해결책 |
+|-------|------|-------------|
+| [높음/중간/낮음] | [문제] | [해결책] |
+
+### 🎯 다음 단계
+1. [구체적 행동 항목 1]
+2. [구체적 행동 항목 2]
+
+모든 출력은 한국어로 작성하세요.
+`;
+
+// ============================================================================
+// VOTING SYSTEM TYPES (차별화 기능 2: 투표/합의 시스템)
+// ============================================================================
+
+interface Vote {
+  agentName: string;
+  vote: "approve" | "reject" | "abstain";
+  reason?: string;
+}
+
+interface VotingResult {
+  proposal: string;
+  votes: Vote[];
+  approve: number;
+  reject: number;
+  abstain: number;
+  consensus: "unanimous" | "majority" | "no_consensus";
+  timestamp: Date;
+}
+
+// ============================================================================
+// VOTING STATE
+// ============================================================================
+
+const votingHistory = new Map<string, VotingResult[]>();
+
+// ============================================================================
+// DEVIL'S ADVOCATE AUTO CRITIQUE (차별화 기능 3: 자동 반론 생성)
+// ============================================================================
+
+async function generateDevilsAdvocateCritique(
+  targetAgentName: string,
+  targetResult: string,
+  team: Team
+): Promise<string> {
+  const daAgent = Array.from(team.agents.values()).find(a => isDevilsAdvocate(a.name));
+  if (!daAgent) {
+    return "[Devil's Advocate가 팀에 없습니다]";
+  }
+
+  const critiquePrompt = `다음은 ${targetAgentName} 에이전트의 분석 결과입니다:
+
+---
+${targetResult}
+---
+
+## Devil's Advocate 역할
+위 분석에 대해 다음 항목들을 반드시 포함하여 비판적 분석을 하세요:
+
+### 🚨 문제점 (What's Wrong)
+- 위 분석의 문제점, 논리적 오류, 놓친 부분
+
+### 💡 대안 (Alternative Approach)
+- 더 나은 접근법이 있다면 제시
+
+### ⚠️ 다른 에이전트가 놓친 것 (What Others Missed)
+- 엣지 케이스, 예외 상황, 고려되지 않은 요소
+
+### 🔍 검증이 필요한 가정
+- 증명되지 않은 전제나 가정
+
+반드시 비판적이어야 하며, 무조건적인 승인은 금지입니다.`;
+
+  try {
+    const { sessionID } = await spawnAgentSession(daAgent.name, critiquePrompt);
+    return await waitForSessionCompletion(sessionID, DEFAULT_TIMEOUT_MS);
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    return `[Devil's Advocate 분석 실패: ${errorMessage}]`;
+  }
+}
+
+// Devil's Advocate 이름 매칭 (여러 변형 지원 + 한국어)
 const DEVILS_ADVOCATE_NAMES = [
   "devil-s-advocate",
   "devils-advocate",
   "devil_advocate",
   "devilsadvocate",
-  "devil-sadvocate"
+  "devil-sadvocate",
+  "반론가",  // Korean "Devil's Advocate"
+  "비판가",  // Korean "Critic"
 ];
 
 function isDevilsAdvocate(agentName: string): boolean {
@@ -171,6 +373,7 @@ const messageQueue = new Map<string, Message[]>();
 const plans = new Map<string, Plan>();
 const agentReputations = new Map<string, AgentReputation>();
 const agentScores = new Map<string, AgentScore[]>();
+const handoffRequests = new Map<string, HandoffRequest>();
 
 // ============================================================================
 // PERSISTENCE
@@ -365,6 +568,201 @@ function loadPlans(): void {
     const errorMessage = error instanceof Error ? error.message : String(error);
     console.warn(`[squad] Failed to load plans: ${errorMessage}`);
   }
+}
+
+// ============================================================================
+// REPUTATION SYSTEM
+// ============================================================================
+
+const REPUTATION_FILE = path.join(TEAMS_DIR, "reputations.json");
+const SCORES_FILE = path.join(TEAMS_DIR, "scores.json");
+
+function getAgentReputation(agentName: string): AgentReputation {
+  let reputation = agentReputations.get(agentName);
+  if (!reputation) {
+    reputation = {
+      totalTasks: 0,
+      successfulTasks: 0,
+      averageScore: 0,
+      lastUpdated: new Date(),
+    };
+    agentReputations.set(agentName, reputation);
+  }
+  return reputation;
+}
+
+function updateAgentReputation(
+  agentName: string,
+  success: boolean,
+  score?: number
+): void {
+  const reputation = getAgentReputation(agentName);
+  reputation.totalTasks++;
+  if (success) {
+    reputation.successfulTasks++;
+  }
+  if (score !== undefined) {
+    // 새 평균 = (기존 평균 * 기존 작업 수 + 새 점수) / 총 작업 수
+    const scoredTasks = reputation.averageScore > 0
+      ? reputation.totalTasks - 1
+      : 0;
+    reputation.averageScore = scoredTasks > 0
+      ? (reputation.averageScore * scoredTasks + score) / (scoredTasks + 1)
+      : score;
+  }
+  reputation.lastUpdated = new Date();
+  saveReputations();
+}
+
+function addAgentScore(
+  agentName: string,
+  score: number,
+  feedback: string,
+  scoredBy: string
+): void {
+  const agentScore: AgentScore = {
+    agentName,
+    score,
+    feedback,
+    scoredBy,
+    timestamp: new Date(),
+  };
+
+  const scores = agentScores.get(agentName) || [];
+  scores.push(agentScore);
+  agentScores.set(agentName, scores);
+  updateAgentReputation(agentName, true, score);
+  saveScores();
+}
+
+function getAgentScores(agentName: string): AgentScore[] {
+  return agentScores.get(agentName) || [];
+}
+
+function formatReputation(agentName: string): string {
+  const reputation = getAgentReputation(agentName);
+  const successRate = reputation.totalTasks > 0
+    ? ((reputation.successfulTasks / reputation.totalTasks) * 100).toFixed(1)
+    : "N/A";
+
+  return `[성공률: ${successRate}% (${reputation.successfulTasks}/${reputation.totalTasks}), 평균점수: ${reputation.averageScore.toFixed(1)}]`;
+}
+
+function saveReputations(): void {
+  try {
+    ensureTeamsDir();
+    const serialized = Array.from(agentReputations.entries());
+    fs.writeFileSync(REPUTATION_FILE, JSON.stringify(serialized, null, 2));
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.warn(`[squad] Failed to save reputations: ${errorMessage}`);
+  }
+}
+
+function loadReputations(): void {
+  try {
+    if (!fs.existsSync(REPUTATION_FILE)) return;
+    const data = JSON.parse(fs.readFileSync(REPUTATION_FILE, "utf-8"));
+    for (const [name, rep] of data) {
+      agentReputations.set(name, {
+        totalTasks: rep.totalTasks,
+        successfulTasks: rep.successfulTasks,
+        averageScore: rep.averageScore,
+        lastUpdated: new Date(rep.lastUpdated),
+      });
+    }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.warn(`[squad] Failed to load reputations: ${errorMessage}`);
+  }
+}
+
+function saveScores(): void {
+  try {
+    ensureTeamsDir();
+    const serialized = Array.from(agentScores.entries()).map(([agentName, scores]) => [
+      agentName,
+      scores.map(s => ({
+        ...s,
+        timestamp: s.timestamp.toISOString(),
+      })),
+    ]);
+    fs.writeFileSync(SCORES_FILE, JSON.stringify(serialized, null, 2));
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.warn(`[squad] Failed to save scores: ${errorMessage}`);
+  }
+}
+
+function loadScores(): void {
+  try {
+    if (!fs.existsSync(SCORES_FILE)) return;
+    const data = JSON.parse(fs.readFileSync(SCORES_FILE, "utf-8"));
+    for (const [agentName, scores] of data) {
+      agentScores.set(agentName, scores.map((s: any) => ({
+        ...s,
+        timestamp: new Date(s.timestamp),
+      })));
+    }
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.warn(`[squad] Failed to load scores: ${errorMessage}`);
+  }
+}
+
+// ============================================================================
+// CONFLICT RESOLUTION
+// ============================================================================
+
+interface ConflictPoint {
+  topic: string;
+  agents: string[];
+  positions: string[];
+  timestamp: Date;
+}
+
+const conflicts = new Map<string, ConflictPoint>();
+
+function detectConflict(
+  teamId: string,
+  results: Map<string, string>
+): ConflictPoint | null {
+  const agents = Array.from(results.keys());
+  if (agents.length < 2) return null;
+
+  // 간단한 충돌 감지: 결과가 서로 다른 에이전트가 다른 결론에 도달
+  const values = Array.from(results.values());
+  const uniqueValues = new Set(values);
+
+  if (uniqueValues.size > 1) {
+    return {
+      topic: "Analysis disagreement",
+      agents,
+      positions: values,
+      timestamp: new Date(),
+    };
+  }
+
+  return null;
+}
+
+function resolveConflict(conflict: ConflictPoint): string {
+  let resolution = `## 충돌 해결 토론\n\n`;
+  resolution += `**주제**: ${conflict.topic}\n`;
+  resolution += `**참여 에이전트**: ${conflict.agents.join(", ")}\n\n`;
+
+  resolution += `### 각 에이전트 입장\n`;
+  conflict.agents.forEach((agent, i) => {
+    resolution += `**${agent}**: ${conflict.positions[i]}\n`;
+  });
+
+  resolution += `\n### 해결 방안\n`;
+  resolution += `1. 각 입장의 장단점 분석\n`;
+  resolution += `2. 공통점 찾기\n`;
+  resolution += `3. 통합 솔루션 제안\n`;
+  resolution += `4. Devil's Advocate 최종 검토\n\n`;
+
+  return resolution;
 }
 
 // ============================================================================
@@ -571,8 +969,25 @@ async function spawnAgentSession(
   // Devil's Advocate면 강제 프롬프트 적용
   const isDA = isDevilsAdvocate(agentName);
   const basePrompt = agentConfig?.prompt_append || "";
+
+  // 한국어 프리셋 감지 및 프롬프트 적용 (차별화 기능 1)
+  let koreanPromptAddon = "";
+  if (teamId) {
+    const team = teams.get(teamId);
+    if (team) {
+      if (team.preset === "korean-review") {
+        koreanPromptAddon = KOREAN_REVIEW_PROMPT;
+      } else if (team.preset === "korean-debate" || team.preset === "debate") {
+        koreanPromptAddon = KOREAN_DEBATE_PROMPT;
+      }
+    }
+  }
+
+  // 시스템 프롬프트 구성
   const effectiveSystemPrompt = isDA
     ? basePrompt + "\n\n" + DEVILS_ADVOCATE_PROMPT
+    : koreanPromptAddon
+    ? basePrompt + "\n\n" + koreanPromptAddon
     : basePrompt;
 
   // SendMessage: 다른 에이전트의 결과를 컨텍스트에 추가
@@ -805,6 +1220,9 @@ async function executeAgent(
     agent.status = "completed";
     agent.result = result;
 
+    // Reputation: 에이전트 평판 업데이트
+    updateAgentReputation(name, true);
+
     // SendMessage: 팀원들에게 결과 방송
     if (teamId) {
       broadcastAgentResult(teamId, name, result, true);
@@ -814,6 +1232,9 @@ async function executeAgent(
   } catch (error) {
     agent.status = "error";
     agent.error = error instanceof Error ? error.message : String(error);
+
+    // Reputation: 실패도 기록
+    updateAgentReputation(name, false);
 
     // SendMessage: 실패 메시지도 방송
     if (teamId) {
@@ -832,9 +1253,10 @@ function formatExecutionResults(
 
   for (const { name, success, result, error } of results) {
     const agent = team.agents.get(name);
+    const reputation = formatReputation(name);
     const statusIcon = success ? "[OK]" : "[FAIL]";
 
-    response += `### ${statusIcon} ${name}\n`;
+    response += `### ${statusIcon} ${name} ${reputation}\n`;
     response += `**Status**: ${agent?.status ?? "unknown"}\n`;
 
     if (success && result) {
@@ -866,6 +1288,10 @@ const PRESETS: Record<string, string[]> = {
   fullstack: ["fullstack-developer", "devil-s-advocate"],
   research: ["explore", "data-scientist", "devil-s-advocate"],
   ai: ["ai-engineer", "llm-architect", "prompt-engineer", "devil-s-advocate"],
+  // Korean-optimized presets (차별화 기능 1)
+  "korean-review": ["code-reviewer", "devil-s-advocate"],
+  "korean-debate": ["planner", "devil-s-advocate"],
+  debate: ["planner", "devil-s-advocate", "security-auditor"],
 };
 
 const PRESET_KEYWORDS: Record<string, string[]> = {
@@ -874,6 +1300,10 @@ const PRESET_KEYWORDS: Record<string, string[]> = {
   planning: ["planning", "계획", "설계"],
   implementation: ["implement", "구현", "개발"],
   research: ["research", "조사", "탐색"],
+  // Korean keywords (차별화 기능 1)
+  "korean-review": ["한국어", "korean", "리뷰"],
+  "korean-debate": ["토론", "debate", "한국어"],
+  debate: ["토론", "debate", "논의"],
 };
 
 function detectPreset(request: string): string {
@@ -1810,6 +2240,609 @@ const planResubmitTool = tool({
 });
 
 // ============================================================================
+// REPUTATION TOOLS
+// ============================================================================
+
+const agentReputationTool = tool({
+  description: "Get agent reputation information",
+  args: {
+    agentName: z.string().describe("Agent name to get reputation for"),
+  },
+  async execute(args) {
+    const reputation = getAgentReputation(args.agentName);
+    const successRate = reputation.totalTasks > 0
+      ? ((reputation.successfulTasks / reputation.totalTasks) * 100).toFixed(1)
+      : "N/A";
+
+    let response = `## Agent Reputation: ${args.agentName}\n\n`;
+    response += `**Total Tasks**: ${reputation.totalTasks}\n`;
+    response += `**Successful Tasks**: ${reputation.successfulTasks}\n`;
+    response += `**Success Rate**: ${successRate}%\n`;
+    response += `**Average Score**: ${reputation.averageScore.toFixed(1)}\n`;
+    response += `**Last Updated**: ${reputation.lastUpdated.toISOString()}\n`;
+
+    return response;
+  },
+});
+
+const agentScoreTool = tool({
+  description: "Score an agent's performance",
+  args: {
+    agentName: z.string().describe("Agent name to score"),
+    score: z.number().min(1).max(10).describe("Score from 1-10"),
+    feedback: z.string().describe("Feedback for the score"),
+    scoredBy: z.string().describe("Who is scoring this agent"),
+  },
+  async execute(args) {
+    addAgentScore(args.agentName, args.score, args.feedback, args.scoredBy);
+
+    let response = `## Agent Scored\n\n`;
+    response += `**Agent**: ${args.agentName}\n`;
+    response += `**Score**: ${args.score}/10\n`;
+    response += `**Feedback**: ${args.feedback}\n`;
+    response += `**Scored By**: ${args.scoredBy}\n\n`;
+    response += `Score recorded and reputation updated.\n`;
+
+    return response;
+  },
+});
+
+const agentScoresTool = tool({
+  description: "Get all scores for an agent",
+  args: {
+    agentName: z.string().describe("Agent name to get scores for"),
+  },
+  async execute(args) {
+    const scores = getAgentScores(args.agentName);
+
+    if (scores.length === 0) {
+      return `No scores found for agent: ${args.agentName}`;
+    }
+
+    let response = `## Agent Scores: ${args.agentName}\n\n`;
+    response += `**Total Scores**: ${scores.length}\n\n`;
+
+    for (const s of scores) {
+      response += `### Score ${s.score}/10\n`;
+      response += `**By**: ${s.scoredBy}\n`;
+      response += `**Feedback**: ${s.feedback}\n`;
+      response += `**Date**: ${s.timestamp.toISOString()}\n\n`;
+    }
+
+    return response;
+  },
+});
+
+const agentRankingsTool = tool({
+  description: "Get agent rankings by performance",
+  args: {
+    sortBy: z.enum(["successRate", "averageScore", "totalTasks"]).optional().default("averageScore"),
+  },
+  async execute(args) {
+    const rankings = Array.from(agentReputations.entries())
+      .map(([name, rep]) => ({
+        name,
+        successRate: rep.totalTasks > 0 ? rep.successfulTasks / rep.totalTasks : 0,
+        averageScore: rep.averageScore,
+        totalTasks: rep.totalTasks,
+      }))
+      .sort((a, b) => {
+        if (args.sortBy === "successRate") return b.successRate - a.successRate;
+        if (args.sortBy === "totalTasks") return b.totalTasks - a.totalTasks;
+        return b.averageScore - a.averageScore;
+      });
+
+    if (rankings.length === 0) {
+      return `No agent rankings available yet.`;
+    }
+
+    let response = `## Agent Rankings (by ${args.sortBy})\n\n`;
+
+    rankings.forEach((r, i) => {
+      response += `**${i + 1}. ${r.name}**\n`;
+      response += `   - Success Rate: ${(r.successRate * 100).toFixed(1)}%\n`;
+      response += `   - Average Score: ${r.averageScore.toFixed(1)}\n`;
+      response += `   - Total Tasks: ${r.totalTasks}\n\n`;
+    });
+
+    return response;
+  },
+});
+
+// ============================================================================
+// VOTING SYSTEM TOOL (차별화 기능 2: 투표/합의 시스템)
+// ============================================================================
+
+const teamVoteTool = tool({
+  description: "Run a vote among team agents on a proposal (차별화 기능: 투표/합의 시스템)",
+  args: {
+    teamId: z.string().describe("Team ID"),
+    proposal: z.string().describe("Proposal to vote on"),
+    threshold: z.enum(["majority", "unanimous"]).optional().describe("Consensus threshold (default: majority)"),
+  },
+  async execute(args) {
+    if (!globalClient) {
+      return "Error: OpenCode client not available";
+    }
+
+    const team = teams.get(args.teamId);
+    if (!team) {
+      return `Error: Team ${args.teamId} not found`;
+    }
+
+    const threshold = args.threshold ?? "majority";
+    let response = `## 🗳️ 투표 시작 (Vote Started)\n\n`;
+    response += `**Team**: ${team.name}\n`;
+    response += `**제안 (Proposal)**: ${args.proposal}\n`;
+    response += `**합의 기준 (Threshold)**: ${threshold === "unanimous" ? "만장일치 (Unanimous)" : "다수결 (Majority)"}\n\n`;
+
+    const votes: Vote[] = [];
+    const votePromises: Promise<{ name: string; vote: "approve" | "reject" | "abstain"; reason?: string }>[] = [];
+
+    for (const [name, agent] of team.agents) {
+      const votePrompt = `다음 제안에 대해 투표해주세요:
+
+## 제안 (Proposal)
+${args.proposal}
+
+## 투표 옵션
+1. **approve** (찬성) - 이 제안을 지지합니다
+2. **reject** (반대) - 이 제안에 반대합니다
+3. **abstain** (기권) - 의견을 유보합니다
+
+## 응답 형식
+**투표**: [approve/reject/abstain]
+**사유**: [간단한 이유]
+
+당신은 ${name}(${agent.role}) 역할입니다. 이 제안에 대해 투표해주세요.`;
+
+      const votePromise = (async () => {
+        try {
+          agent.status = "thinking";
+          const { sessionID } = await spawnAgentSession(name, votePrompt);
+          agent.sessionID = sessionID;
+          agent.status = "responding";
+
+          const result = await waitForSessionCompletion(sessionID, DEFAULT_TIMEOUT_MS);
+          agent.status = "completed";
+
+          // Parse vote from result
+          const voteMatch = result.match(/투표\s*[:：]\s*(approve|reject|abstain)/i) ||
+                           result.match(/vote\s*[:：]\s*(approve|reject|abstain)/i);
+          const reasonMatch = result.match(/사유\s*[:：]\s*(.+)/i) ||
+                            result.match(/reason\s*[:：]\s*(.+)/i);
+
+          const vote = (voteMatch?.[1]?.toLowerCase() || "abstain") as "approve" | "reject" | "abstain";
+          const reason = reasonMatch?.[1] || truncateText(result, 200);
+
+          return { name, vote, reason };
+        } catch (error) {
+          agent.status = "error";
+          return { name, vote: "abstain" as const, reason: "Error during voting" };
+        }
+      })();
+
+      votePromises.push(votePromise);
+    }
+
+    const voteResults = await Promise.allSettled(votePromises);
+
+    for (const r of voteResults) {
+      if (r.status === "fulfilled") {
+        const { name, vote, reason } = r.value;
+        votes.push({ agentName: name, vote, reason });
+      }
+    }
+
+    // Count votes
+    const approve = votes.filter(v => v.vote === "approve").length;
+    const reject = votes.filter(v => v.vote === "reject").length;
+    const abstain = votes.filter(v => v.vote === "abstain").length;
+    const total = votes.length;
+
+    // Determine consensus
+    let consensus: "unanimous" | "majority" | "no_consensus";
+    if (threshold === "unanimous") {
+      consensus = approve === total ? "unanimous" : "no_consensus";
+    } else {
+      consensus = approve > reject ? "majority" : "no_consensus";
+    }
+
+    // Save voting result
+    const votingResult: VotingResult = {
+      proposal: args.proposal,
+      votes,
+      approve,
+      reject,
+      abstain,
+      consensus,
+      timestamp: new Date(),
+    };
+
+    if (!votingHistory.has(args.teamId)) {
+      votingHistory.set(args.teamId, []);
+    }
+    votingHistory.get(args.teamId)!.push(votingResult);
+
+    // Format response
+    response += `---\n\n## 📊 투표 결과 (Voting Results)\n\n`;
+
+    const voteIcons: Record<string, string> = {
+      approve: "✅",
+      reject: "❌",
+      abstain: "⚪",
+    };
+
+    for (const v of votes) {
+      const icon = voteIcons[v.vote] || "⚪";
+      response += `${icon} **${v.agentName}**: ${v.vote}`;
+      if (v.reason) {
+        response += `\n   _${v.reason}_`;
+      }
+      response += `\n\n`;
+    }
+
+    response += `---\n\n## 📈 집계 (Summary)\n\n`;
+    response += `| 찬성 (Approve) | 반대 (Reject) | 기권 (Abstain) | 합계 (Total) |\n`;
+    response += `|:-------------:|:-------------:|:--------------:|:-------------:|\n`;
+    response += `| ${approve} | ${reject} | ${abstain} | ${total} |\n\n`;
+
+    const consensusKorean: Record<string, string> = {
+      unanimous: "✅ **만장일치 합의 (Unanimous Consensus)**",
+      majority: "✅ **다수결 합의 (Majority Consensus)**",
+      "no_consensus": "❌ **합의 도달 실패 (No Consensus)**",
+    };
+
+    response += `**결과 (Result)**: ${consensusKorean[consensus]}\n`;
+    response += `\n---\n\n**Team ID**: ${args.teamId}`;
+
+    return response;
+  },
+});
+
+// ============================================================================
+// TEAM SCORE TOOL (차별화 기능: 팀 결과 채점)
+// ============================================================================
+
+const teamScoreTool = tool({
+  description: "Score an agent's performance within a team context",
+  args: {
+    teamId: z.string().describe("Team ID"),
+    agentId: z.string().describe("Agent to score"),
+    score: z.number().min(1).max(10).describe("Score from 1-10"),
+    feedback: z.string().describe("Feedback for the score"),
+  },
+  async execute(args) {
+    const team = teams.get(args.teamId);
+    if (!team) {
+      return `Error: Team ${args.teamId} not found`;
+    }
+
+    const agent = team.agents.get(args.agentId);
+    if (!agent) {
+      return `Error: Agent ${args.agentId} not found in team`;
+    }
+
+    // Add score using existing scoring system
+    addAgentScore(args.agentId, args.score, args.feedback, "team-lead");
+
+    // Get updated reputation
+    const reputation = getAgentReputation(args.agentId);
+    const successRate = reputation.totalTasks > 0
+      ? ((reputation.successfulTasks / reputation.totalTasks) * 100).toFixed(1)
+      : "N/A";
+
+    let response = `## 📊 Agent Scored\n\n`;
+    response += `**Team**: ${team.name}\n`;
+    response += `**Agent**: ${args.agentId}\n`;
+    response += `**Score**: ${args.score}/10\n`;
+    response += `**Feedback**: ${args.feedback}\n\n`;
+    response += `---\n\n`;
+    response += `## Updated Reputation\n\n`;
+    response += `**Average Score**: ${reputation.averageScore.toFixed(1)}/10\n`;
+    response += `**Success Rate**: ${successRate}%\n`;
+    response += `**Total Tasks**: ${reputation.totalTasks}\n`;
+
+    return response;
+  },
+});
+
+// ============================================================================
+// SUMMARY BOT TOOL (차별화 기능 4: 종합 보고서 봇)
+// ============================================================================
+
+const teamSummarizeTool = tool({
+  description: "Generate a comprehensive summary report from all team discussions and results (차별화 기능: 종합 보고서 봇)",
+  args: {
+    teamId: z.string().describe("Team ID"),
+    language: z.enum(["korean", "english"]).optional().describe("Summary language (default: korean)"),
+  },
+  async execute(args) {
+    if (!globalClient) {
+      return "Error: OpenCode client not available";
+    }
+
+    const team = teams.get(args.teamId);
+    if (!team) {
+      return `Error: Team ${args.teamId} not found`;
+    }
+
+    const language = args.language ?? "korean";
+    const isKorean = language === "korean";
+
+    // Collect all agent results
+    const agentResults = Array.from(team.agents.entries())
+      .filter(([_, agent]) => agent.result)
+      .map(([name, agent]) => `### ${name}\n${agent.result}`)
+      .join("\n\n");
+
+    if (!agentResults) {
+      return isKorean
+        ? "Error: 분석 결과가 없습니다. 먼저 에이전트를 실행하세요."
+        : "Error: No results found. Run agents first.";
+    }
+
+    // Use a planner agent or the first available agent for summary
+    const summaryAgentName = team.agents.has("planner") ? "planner" : Array.from(team.agents.keys())[0];
+
+    const summaryPrompt = isKorean
+      ? `${SUMMARY_BOT_PROMPT}
+
+## 팀 정보
+- **팀명**: ${team.name}
+- **작업**: ${team.task}
+
+## 에이전트별 결과
+${agentResults}
+
+위 모든 에이전트의 결과를 분석하여 종합 보고서를 작성하세요.`
+      : `You are a comprehensive report writer.
+
+## Team Information
+- **Team**: ${team.name}
+- **Task**: ${team.task}
+
+## Agent Results
+${agentResults}
+
+Analyze all agent results and create a comprehensive summary report with:
+1. **Executive Summary**: Key conclusions
+2. **Agent Opinions Table**: Summary of each agent's position
+3. **Agreed Items**: What everyone agreed on
+4. **Disputed Items**: Where opinions differed
+5. **Risks/Issues Found**: With severity and proposed solutions
+6. **Next Steps**: Specific action items`;
+
+    try {
+      const agent = team.agents.get(summaryAgentName);
+      if (!agent) {
+        return "Error: No agent available for summary";
+      }
+
+      agent.status = "thinking";
+      const { sessionID } = await spawnAgentSession(summaryAgentName, summaryPrompt);
+      agent.sessionID = sessionID;
+      agent.status = "responding";
+
+      const summary = await waitForSessionCompletion(sessionID, DEFAULT_TIMEOUT_MS);
+      agent.status = "completed";
+
+      let response = isKorean
+        ? `## 📋 종합 보고서 (Summary Report)\n\n`
+        : `## 📋 Summary Report\n\n`;
+
+      response += `**Team**: ${team.name}\n`;
+      response += `**Task**: ${team.task}\n`;
+      response += `**Generated**: ${new Date().toISOString()}\n\n`;
+      response += `---\n\n`;
+      response += summary;
+
+      return response;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return `Error generating summary: ${errorMessage}`;
+    }
+  },
+});
+
+// ============================================================================
+// AGENT HANDOFF TOOL (차별화 기능: 에이전트 간 작업 위임)
+// ============================================================================
+
+const agentHandoffTool = tool({
+  description: "Allow agents to delegate tasks to each other mid-execution (차별화 기능: 에이전트 핸드오프)",
+  args: {
+    teamId: z.string().describe("Team ID"),
+    fromAgent: z.string().describe("Agent delegating the task"),
+    toAgent: z.string().describe("Agent receiving the delegation"),
+    task: z.string().describe("Task to delegate"),
+    reason: z.string().describe("Reason for delegation"),
+  },
+  async execute(args) {
+    const team = teams.get(args.teamId);
+    if (!team) {
+      return `Error: Team ${args.teamId} not found`;
+    }
+
+    const fromAgent = team.agents.get(args.fromAgent);
+    const toAgent = team.agents.get(args.toAgent);
+
+    if (!fromAgent || !toAgent) {
+      return `Error: One or both agents not found in team`;
+    }
+
+    // Record handoff
+    const handoff: HandoffRequest = {
+      fromAgent: args.fromAgent,
+      toAgent: args.toAgent,
+      task: args.task,
+      reason: args.reason,
+      timestamp: new Date(),
+    };
+    handoffRequests.set(`${args.teamId}-${Date.now()}`, handoff);
+
+    // Execute the delegated task
+    try {
+      toAgent.status = "thinking";
+      const { sessionID } = await spawnAgentSession(args.toAgent, args.task);
+      toAgent.sessionID = sessionID;
+      toAgent.status = "responding";
+
+      const result = await waitForSessionCompletion(sessionID, DEFAULT_TIMEOUT_MS);
+      toAgent.status = "completed";
+      toAgent.result = result;
+
+      let response = `## 🔄 Agent Handoff\n\n`;
+      response += `**From**: ${args.fromAgent}\n`;
+      response += `**To**: ${args.toAgent}\n`;
+      response += `**Reason**: ${args.reason}\n\n`;
+      response += `### Delegated Task\n${args.task}\n\n`;
+      response += `### Result\n${truncateText(result, MAX_RESULT_LENGTH)}\n`;
+
+      return response;
+    } catch (error) {
+      toAgent.status = "error";
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      return `Error during handoff: ${errorMessage}`;
+    }
+  },
+});
+
+// ============================================================================
+// CONFLICT RESOLUTION TOOL (차별화 기능: 구조화된 충돌 해결)
+// ============================================================================
+
+const conflictResolveTool = tool({
+  description: "Structured debate format when agents disagree (차별화 기능: 충돌 해결)",
+  args: {
+    teamId: z.string().describe("Team ID"),
+    topic: z.string().describe("Topic of disagreement"),
+    positions: z.array(z.object({
+      agent: z.string().describe("Agent name"),
+      position: z.string().describe("Agent's position"),
+    })).describe("Each agent's position on the topic"),
+  },
+  async execute(args) {
+    const team = teams.get(args.teamId);
+    if (!team) {
+      return `Error: Team ${args.teamId} not found`;
+    }
+
+    // Record conflict
+    const conflict: ConflictPoint = {
+      topic: args.topic,
+      agents: args.positions.map(p => p.agent),
+      positions: args.positions.map(p => p.position),
+      timestamp: new Date(),
+      resolved: false,
+    };
+    conflicts.set(`${args.teamId}-${Date.now()}`, conflict);
+
+    let response = `## ⚖️ Conflict Resolution: ${args.topic}\n\n`;
+
+    // Phase 1: Present positions
+    response += `### Phase 1: Positions\n\n`;
+    for (const pos of args.positions) {
+      response += `**${pos.agent}**: ${pos.position}\n\n`;
+    }
+
+    // Phase 2: Devil's Advocate critique
+    const daAgent = Array.from(team.agents.values()).find(a => isDevilsAdvocate(a.name));
+    if (daAgent) {
+      response += `### Phase 2: Devil's Advocate Critique\n\n`;
+
+      const critiquePrompt = `다음 주제에 대해 에이전트들이 서로 다른 의견을 가지고 있습니다:
+
+## 주제: ${args.topic}
+
+## 각 에이전트 입장:
+${args.positions.map(p => `- ${p.agent}: ${p.position}`).join('\n')}
+
+## Devil's Advocate 역할
+위 입장들에 대해 비판적 분석을 하세요:
+1. 각 입장의 약점
+2. 놓친 관점
+3. 더 나은 대안
+
+반드시 비판적이어야 합니다.`;
+
+      try {
+        const { sessionID } = await spawnAgentSession(daAgent.name, critiquePrompt);
+        const critique = await waitForSessionCompletion(sessionID, DEFAULT_TIMEOUT_MS);
+        response += `**${daAgent.name}**:\n${truncateText(critique, MAX_RESULT_LENGTH)}\n\n`;
+      } catch (error) {
+        response += `[Devil's Advocate 분석 실패]\n\n`;
+      }
+    }
+
+    // Phase 3: Proposed resolution
+    response += `### Phase 3: Proposed Resolution\n\n`;
+    response += `Use \`/team-vote\` to vote on the best approach.\n`;
+    response += `\n---\n\n**Team ID**: ${args.teamId}`;
+
+    return response;
+  },
+});
+
+// ============================================================================
+// DEVIL'S ADVOCATE AUTO CRITIQUE TOOL (차별화 기능: 자동 반론 생성)
+// ============================================================================
+
+const daCritiqueTool = tool({
+  description: "Devil's Advocate automatically critiques other agents' results (차별화 기능: 자동 반론 생성)",
+  args: {
+    teamId: z.string().describe("Team ID"),
+    targetAgent: z.string().describe("Agent to critique (omit for all agents)"),
+  },
+  async execute(args) {
+    if (!globalClient) {
+      return "Error: OpenCode client not available";
+    }
+
+    const team = teams.get(args.teamId);
+    if (!team) {
+      return `Error: Team ${args.teamId} not found`;
+    }
+
+    // Check if Devil's Advocate exists in team
+    const daAgent = Array.from(team.agents.values()).find(a => isDevilsAdvocate(a.name));
+    if (!daAgent) {
+      return "Error: No Devil's Advocate in team. Add one to use auto-critique.";
+    }
+
+    let response = `## 🚨 Devil's Advocate Auto-Critique\n\n`;
+    response += `**Team**: ${team.name}\n`;
+    response += `**Devil's Advocate**: ${daAgent.name}\n\n`;
+
+    // Determine which agents to critique
+    const agentsToCritique = args.targetAgent
+      ? [[args.targetAgent, team.agents.get(args.targetAgent)] as const].filter(([, a]) => a)
+      : Array.from(team.agents.entries()).filter(([name]) => !isDevilsAdvocate(name));
+
+    if (agentsToCritique.length === 0) {
+      return "Error: No agents to critique (agent not found or only DA in team)";
+    }
+
+    // Generate critiques
+    for (const [name, agent] of agentsToCritique) {
+      if (!agent?.result) {
+        response += `### ${name}\n[No results to critique]\n\n`;
+        continue;
+      }
+
+      response += `### 🎯 Critique: ${name}\n\n`;
+      const critique = await generateDevilsAdvocateCritique(name, agent.result, team);
+      response += `${truncateText(critique, MAX_RESULT_LENGTH)}\n\n`;
+      response += `---\n\n`;
+    }
+
+    response += `**Team ID**: ${args.teamId}`;
+
+    return response;
+  },
+});
+
+// ============================================================================
 // PLUGIN EXPORT
 // ============================================================================
 
@@ -1817,6 +2850,8 @@ const plugin: Plugin = async (input: PluginInput) => {
   globalClient = input.client;
   loadOpenCodeAgents();
   loadPlans();
+  loadReputations();
+  loadScores();
 
   return {
     tool: {
@@ -1836,6 +2871,17 @@ const plugin: Plugin = async (input: PluginInput) => {
       "plan-list": planListTool,
       "plan-status": planStatusTool,
       "plan-resubmit": planResubmitTool,
+      "agent-reputation": agentReputationTool,
+      "agent-score": agentScoreTool,
+      "agent-scores": agentScoresTool,
+      "agent-rankings": agentRankingsTool,
+      // 차별화 기능 (Differentiation features)
+      "team-vote": teamVoteTool,
+      "team-score": teamScoreTool,
+      "team-summarize": teamSummarizeTool,
+      "agent-handoff": agentHandoffTool,
+      "conflict-resolve": conflictResolveTool,
+      "da-critique": daCritiqueTool,
     },
   };
 };

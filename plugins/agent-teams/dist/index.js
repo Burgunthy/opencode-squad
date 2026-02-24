@@ -41,13 +41,147 @@ const DEVILS_ADVOCATE_PROMPT = `
 
 반드시 비판적이어야 합니다. 무조건적인 승인은 금지입니다.
 `;
-// Devil's Advocate 이름 매칭 (여러 변형 지원)
+// ============================================================================
+// KOREAN-OPTIMIZED PROMPTS (차별화 기능 1: 한국어 최적화)
+// ============================================================================
+const KOREAN_REVIEW_PROMPT = `
+당신은 한국어 최적화 코드 리뷰어입니다.
+
+## 역할
+- **전문가 수준의 코드 분석**: 한국어로 상세하고 명확한 리뷰 제공
+- **구체적 개선 제안**: "이 부분을 고치세요" 대신 "이 부분을 X 방식으로 개선하면 Y 이유로 더 좋습니다"와 같이 구체적으로
+- **우선순위 표시**: 🔴 심각한 문제, 🟡 개선 제안, 🔵 스타일 제안
+
+## 출력 형식 (한국어)
+### 📋 리뷰 요약
+[한 문장 요약]
+
+### 🔴 심각한 문제 (Critical)
+- **위치**: 파일:행
+- **문제**: [설명]
+- **해결방안**: [구체적 코드 수정 제안]
+
+### 🟡 개선 제안 (Improvement)
+- **위치**: 파일:행
+- **제안**: [설명]
+- **이유**: [왜 더 나은지]
+
+### 🔵 스타일 (Style)
+- [설명]
+
+### ✅ 장점
+- [잘 된 부분 인정]
+
+모든 출력은 한국어로 작성하세요.
+`;
+const KOREAN_DEBATE_PROMPT = `
+당신은 토론 전문가입니다. 건설적인 토론을 이끌어주세요.
+
+## 토론 원칙
+1. **논리적 근거**: 모든 주장에 근거 제시
+2. **상호 존중**: 타 에이전트 의견 존중
+3. **사실 중심**: 개인적 의견보다 사실 위주
+
+## 한국어 토론 형식
+### 🎯 내 입장
+[한 문장으로 요약]
+
+### 📊 근거
+1. [첫 번째 근거]
+2. [두 번째 근거]
+
+### 🔄 다른 의견에 대한 답변
+[다른 에이전트 의견에 대한 반론/수용]
+
+### 💎 결론
+[최종 요약]
+
+모든 출력은 한국어로 작성하세요.
+`;
+const SUMMARY_BOT_PROMPT = `
+당신은 종합 보고서 작성 전문가입니다.
+
+## 역할
+모든 에이전트의 의견과 토론을 분석하여, 객관적이고 균형 잡힌 종합 보고서를 작성하세요.
+
+## 보고서 구조 (한국어)
+### 📌 결론 요약
+[모든 에이전트 합의사항 또는 최종 결론]
+
+### 📊 에이전트별 주요 의견
+| 에이전트 | 주장 | 요약 |
+|---------|------|------|
+| [이름] | [주장] | [한 줄 요약] |
+
+### 🔍 합의된 사항
+- [모두가 동의한 사항]
+
+### 💭 논의된 사항 (합의 미달)
+- [의견이 나뉜 사항과 각 입장]
+
+### ⚠️ 발견된 위험/문제점
+| 위험도 | 문제 | 제안된 해결책 |
+|-------|------|-------------|
+| [높음/중간/낮음] | [문제] | [해결책] |
+
+### 🎯 다음 단계
+1. [구체적 행동 항목 1]
+2. [구체적 행동 항목 2]
+
+모든 출력은 한국어로 작성하세요.
+`;
+// ============================================================================
+// VOTING STATE
+// ============================================================================
+const votingHistory = new Map();
+// ============================================================================
+// DEVIL'S ADVOCATE AUTO CRITIQUE (차별화 기능 3: 자동 반론 생성)
+// ============================================================================
+async function generateDevilsAdvocateCritique(targetAgentName, targetResult, team) {
+    const daAgent = Array.from(team.agents.values()).find(a => isDevilsAdvocate(a.name));
+    if (!daAgent) {
+        return "[Devil's Advocate가 팀에 없습니다]";
+    }
+    const critiquePrompt = `다음은 ${targetAgentName} 에이전트의 분석 결과입니다:
+
+---
+${targetResult}
+---
+
+## Devil's Advocate 역할
+위 분석에 대해 다음 항목들을 반드시 포함하여 비판적 분석을 하세요:
+
+### 🚨 문제점 (What's Wrong)
+- 위 분석의 문제점, 논리적 오류, 놓친 부분
+
+### 💡 대안 (Alternative Approach)
+- 더 나은 접근법이 있다면 제시
+
+### ⚠️ 다른 에이전트가 놓친 것 (What Others Missed)
+- 엣지 케이스, 예외 상황, 고려되지 않은 요소
+
+### 🔍 검증이 필요한 가정
+- 증명되지 않은 전제나 가정
+
+반드시 비판적이어야 하며, 무조건적인 승인은 금지입니다.`;
+    try {
+        const { sessionID } = await spawnAgentSession(daAgent.name, critiquePrompt);
+        return await waitForSessionCompletion(sessionID, DEFAULT_TIMEOUT_MS);
+    }
+    catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        return `[Devil's Advocate 분석 실패: ${errorMessage}]`;
+    }
+}
+// Devil's Advocate 이름 매칭 (여러 변형 지원 + 한국어)
 const DEVILS_ADVOCATE_NAMES = [
     "devil-s-advocate",
     "devils-advocate",
     "devil_advocate",
     "devilsadvocate",
-    "devil-sadvocate"
+    "devil-sadvocate",
+    "반론가", // Korean "Devil's Advocate"
+    "비판가", // Korean "Critic"
 ];
 function isDevilsAdvocate(agentName) {
     const normalized = agentName.toLowerCase().replace(/[_-]/g, "");
@@ -60,6 +194,10 @@ let globalClient = null;
 let opencodeConfig = {};
 const teams = new Map();
 const messageQueue = new Map();
+const plans = new Map();
+const agentReputations = new Map();
+const agentScores = new Map();
+const handoffRequests = new Map();
 // ============================================================================
 // PERSISTENCE
 // ============================================================================
@@ -103,7 +241,7 @@ function saveTeam(team) {
     }
     catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        console.warn(`[agent-teams] Failed to save team: ${errorMessage}`);
+        console.warn(`[squad] Failed to save team: ${errorMessage}`);
     }
 }
 function loadTeam(teamId) {
@@ -150,27 +288,367 @@ function loadTeam(teamId) {
     }
     catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        console.warn(`[agent-teams] Failed to load team: ${errorMessage}`);
+        console.warn(`[squad] Failed to load team: ${errorMessage}`);
         return null;
     }
 }
 // ============================================================================
+// PLAN APPROVAL SYSTEM
+// ============================================================================
+function createPlan(agentId, agentName, content) {
+    const plan = {
+        id: `plan-${Date.now()}-${randomUUID().slice(0, 8)}`,
+        agentId,
+        agentName,
+        content,
+        status: "pending",
+        submittedAt: new Date(),
+    };
+    plans.set(plan.id, plan);
+    savePlans();
+    return plan;
+}
+function updatePlanStatus(planId, status, feedback) {
+    const plan = plans.get(planId);
+    if (!plan)
+        return null;
+    plan.status = status;
+    if (feedback !== undefined) {
+        plan.feedback = feedback;
+    }
+    if (status === "approved" || status === "rejected") {
+        plan.reviewedAt = new Date();
+    }
+    savePlans();
+    return plan;
+}
+function getPendingPlans() {
+    return Array.from(plans.values()).filter(p => p.status === "pending");
+}
+function getPlan(planId) {
+    return plans.get(planId) ?? null;
+}
+function getPlansByAgent(agentId) {
+    return Array.from(plans.values()).filter(p => p.agentId === agentId);
+}
+// Plan persistence
+const PLANS_FILE = path.join(TEAMS_DIR, "plans.json");
+function savePlans() {
+    try {
+        ensureTeamsDir();
+        const serialized = Array.from(plans.entries()).map(([id, plan]) => ({
+            id,
+            agentId: plan.agentId,
+            agentName: plan.agentName,
+            content: plan.content,
+            status: plan.status,
+            feedback: plan.feedback,
+            submittedAt: plan.submittedAt.toISOString(),
+            reviewedAt: plan.reviewedAt?.toISOString(),
+        }));
+        fs.writeFileSync(PLANS_FILE, JSON.stringify(serialized, null, 2));
+    }
+    catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.warn(`[squad] Failed to save plans: ${errorMessage}`);
+    }
+}
+function loadPlans() {
+    try {
+        if (!fs.existsSync(PLANS_FILE))
+            return;
+        const data = JSON.parse(fs.readFileSync(PLANS_FILE, "utf-8"));
+        for (const item of data) {
+            const plan = {
+                id: item.id,
+                agentId: item.agentId,
+                agentName: item.agentName,
+                content: item.content,
+                status: item.status,
+                feedback: item.feedback,
+                submittedAt: new Date(item.submittedAt),
+                reviewedAt: item.reviewedAt ? new Date(item.reviewedAt) : undefined,
+            };
+            plans.set(plan.id, plan);
+        }
+    }
+    catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.warn(`[squad] Failed to load plans: ${errorMessage}`);
+    }
+}
+// ============================================================================
+// REPUTATION SYSTEM
+// ============================================================================
+const REPUTATION_FILE = path.join(TEAMS_DIR, "reputations.json");
+const SCORES_FILE = path.join(TEAMS_DIR, "scores.json");
+function getAgentReputation(agentName) {
+    let reputation = agentReputations.get(agentName);
+    if (!reputation) {
+        reputation = {
+            totalTasks: 0,
+            successfulTasks: 0,
+            averageScore: 0,
+            lastUpdated: new Date(),
+        };
+        agentReputations.set(agentName, reputation);
+    }
+    return reputation;
+}
+function updateAgentReputation(agentName, success, score) {
+    const reputation = getAgentReputation(agentName);
+    reputation.totalTasks++;
+    if (success) {
+        reputation.successfulTasks++;
+    }
+    if (score !== undefined) {
+        // 새 평균 = (기존 평균 * 기존 작업 수 + 새 점수) / 총 작업 수
+        const scoredTasks = reputation.averageScore > 0
+            ? reputation.totalTasks - 1
+            : 0;
+        reputation.averageScore = scoredTasks > 0
+            ? (reputation.averageScore * scoredTasks + score) / (scoredTasks + 1)
+            : score;
+    }
+    reputation.lastUpdated = new Date();
+    saveReputations();
+}
+function addAgentScore(agentName, score, feedback, scoredBy) {
+    const agentScore = {
+        agentName,
+        score,
+        feedback,
+        scoredBy,
+        timestamp: new Date(),
+    };
+    const scores = agentScores.get(agentName) || [];
+    scores.push(agentScore);
+    agentScores.set(agentName, scores);
+    updateAgentReputation(agentName, true, score);
+    saveScores();
+}
+function getAgentScores(agentName) {
+    return agentScores.get(agentName) || [];
+}
+function formatReputation(agentName) {
+    const reputation = getAgentReputation(agentName);
+    const successRate = reputation.totalTasks > 0
+        ? ((reputation.successfulTasks / reputation.totalTasks) * 100).toFixed(1)
+        : "N/A";
+    return `[성공률: ${successRate}% (${reputation.successfulTasks}/${reputation.totalTasks}), 평균점수: ${reputation.averageScore.toFixed(1)}]`;
+}
+function saveReputations() {
+    try {
+        ensureTeamsDir();
+        const serialized = Array.from(agentReputations.entries());
+        fs.writeFileSync(REPUTATION_FILE, JSON.stringify(serialized, null, 2));
+    }
+    catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.warn(`[squad] Failed to save reputations: ${errorMessage}`);
+    }
+}
+function loadReputations() {
+    try {
+        if (!fs.existsSync(REPUTATION_FILE))
+            return;
+        const data = JSON.parse(fs.readFileSync(REPUTATION_FILE, "utf-8"));
+        for (const [name, rep] of data) {
+            agentReputations.set(name, {
+                totalTasks: rep.totalTasks,
+                successfulTasks: rep.successfulTasks,
+                averageScore: rep.averageScore,
+                lastUpdated: new Date(rep.lastUpdated),
+            });
+        }
+    }
+    catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.warn(`[squad] Failed to load reputations: ${errorMessage}`);
+    }
+}
+function saveScores() {
+    try {
+        ensureTeamsDir();
+        const serialized = Array.from(agentScores.entries()).map(([agentName, scores]) => [
+            agentName,
+            scores.map(s => ({
+                ...s,
+                timestamp: s.timestamp.toISOString(),
+            })),
+        ]);
+        fs.writeFileSync(SCORES_FILE, JSON.stringify(serialized, null, 2));
+    }
+    catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.warn(`[squad] Failed to save scores: ${errorMessage}`);
+    }
+}
+function loadScores() {
+    try {
+        if (!fs.existsSync(SCORES_FILE))
+            return;
+        const data = JSON.parse(fs.readFileSync(SCORES_FILE, "utf-8"));
+        for (const [agentName, scores] of data) {
+            agentScores.set(agentName, scores.map((s) => ({
+                ...s,
+                timestamp: new Date(s.timestamp),
+            })));
+        }
+    }
+    catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error);
+        console.warn(`[squad] Failed to load scores: ${errorMessage}`);
+    }
+}
+const conflicts = new Map();
+function detectConflict(teamId, results) {
+    const agents = Array.from(results.keys());
+    if (agents.length < 2)
+        return null;
+    // 간단한 충돌 감지: 결과가 서로 다른 에이전트가 다른 결론에 도달
+    const values = Array.from(results.values());
+    const uniqueValues = new Set(values);
+    if (uniqueValues.size > 1) {
+        return {
+            topic: "Analysis disagreement",
+            agents,
+            positions: values,
+            timestamp: new Date(),
+        };
+    }
+    return null;
+}
+function resolveConflict(conflict) {
+    let resolution = `## 충돌 해결 토론\n\n`;
+    resolution += `**주제**: ${conflict.topic}\n`;
+    resolution += `**참여 에이전트**: ${conflict.agents.join(", ")}\n\n`;
+    resolution += `### 각 에이전트 입장\n`;
+    conflict.agents.forEach((agent, i) => {
+        resolution += `**${agent}**: ${conflict.positions[i]}\n`;
+    });
+    resolution += `\n### 해결 방안\n`;
+    resolution += `1. 각 입장의 장단점 분석\n`;
+    resolution += `2. 공통점 찾기\n`;
+    resolution += `3. 통합 솔루션 제안\n`;
+    resolution += `4. Devil's Advocate 최종 검토\n\n`;
+    return resolution;
+}
+// ============================================================================
 // MESSAGE PROTOCOL
 // ============================================================================
+/**
+ * SendMessage 구현 - 에이전트 간 메시지 교환
+ * @param message 전송할 메시지
+ */
 function sendMessage(message) {
-    const key = message.recipient || "broadcast";
+    // 팀별 메시지 큐 키 생성
+    const baseKey = message.recipient || "broadcast";
+    const key = message.teamId ? `${message.teamId}:${baseKey}` : baseKey;
     const queue = messageQueue.get(key) || [];
     queue.push(message);
     messageQueue.set(key, queue);
+    // 브로드캐스트 메시지는 팀 브로드캐스트 큐에도 저장
+    if (message.type === "broadcast" && message.teamId) {
+        const broadcastKey = `${message.teamId}:broadcast`;
+        const broadcastQueue = messageQueue.get(broadcastKey) || [];
+        broadcastQueue.push(message);
+        messageQueue.set(broadcastKey, broadcastQueue);
+    }
 }
-function getMessages(recipient, since) {
-    const queue = messageQueue.get(recipient) || [];
-    const broadcast = messageQueue.get("broadcast") || [];
-    const all = [...queue, ...broadcast];
+/**
+ * 에이전트 실행 결과를 팀원들에게 방송
+ * @param teamId 팀 ID
+ * @param senderName 발신자 에이전트 이름
+ * @param result 실행 결과
+ * @param success 성공 여부
+ */
+function broadcastAgentResult(teamId, senderName, result, success) {
+    const summary = success && result
+        ? `Completed: ${result.slice(0, 100)}...`
+        : `Failed: ${senderName} encountered an error`;
+    sendMessage({
+        type: "broadcast",
+        sender: senderName,
+        content: result || "No result",
+        summary,
+        timestamp: new Date(),
+        teamId,
+    });
+}
+/**
+ * 특정 에이전트에게 메시지 전송 (DM)
+ * @param teamId 팀 ID
+ * @param senderName 발신자
+ * @param recipientName 수신자
+ * @param content 메시지 내용
+ */
+function sendDirectMessage(teamId, senderName, recipientName, content) {
+    sendMessage({
+        type: "message",
+        sender: senderName,
+        recipient: recipientName,
+        content,
+        summary: content.slice(0, 50),
+        timestamp: new Date(),
+        teamId,
+    });
+}
+/**
+ * 팀 메시지 가져오기
+ * @param teamId 팀 ID
+ * @param recipient 수신자 (broadcast 포함)
+ * @param since 이후 시간부터의 메시지만
+ */
+function getTeamMessages(teamId, recipient = "broadcast", since) {
+    const key = `${teamId}:${recipient}`;
+    const queue = messageQueue.get(key) || [];
+    // 브로드캐스트 메시지도 포함
+    let all = queue;
+    if (recipient !== "broadcast") {
+        const broadcastKey = `${teamId}:broadcast`;
+        const broadcast = messageQueue.get(broadcastKey) || [];
+        all = [...queue, ...broadcast];
+    }
     if (since) {
         return all.filter(m => m.timestamp > since);
     }
     return all;
+}
+/**
+ * 에이전트 간 컨텍스트 형식화 (프롬프트용)
+ * @param teamId 팀 ID
+ * @param excludeAgent 제외할 에이전트 이름
+ */
+function formatAgentContext(teamId, excludeAgent) {
+    const messages = getTeamMessages(teamId, "broadcast");
+    if (messages.length === 0) {
+        return "(다른 에이전트의 결과가 아직 없습니다)";
+    }
+    const filtered = excludeAgent
+        ? messages.filter(m => m.sender !== excludeAgent)
+        : messages;
+    if (filtered.length === 0) {
+        return "(다른 에이전트의 결과가 아직 없습니다)";
+    }
+    return filtered
+        .map(m => `### ${m.sender}:\n${m.summary || m.content.slice(0, 300)}`)
+        .join("\n\n");
+}
+/**
+ * 팀 메시지 큐 정리
+ * @param teamId 팀 ID
+ */
+function clearTeamMessages(teamId) {
+    const keysToDelete = [];
+    for (const [key] of messageQueue) {
+        if (key.startsWith(`${teamId}:`)) {
+            keysToDelete.push(key);
+        }
+    }
+    for (const key of keysToDelete) {
+        messageQueue.delete(key);
+    }
 }
 // ============================================================================
 // UTILITY FUNCTIONS
@@ -191,14 +669,14 @@ function loadOpenCodeAgents() {
     }
     catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        console.warn(`[agent-teams] Failed to load opencode.json: ${errorMessage}`);
+        console.warn(`[squad] Failed to load opencode.json: ${errorMessage}`);
         return {};
     }
 }
 // ============================================================================
 // REAL AGENT EXECUTION
 // ============================================================================
-async function spawnAgentSession(agentName, task) {
+async function spawnAgentSession(agentName, task, teamId) {
     if (!globalClient) {
         throw new Error("OpenCode client not initialized");
     }
@@ -211,11 +689,35 @@ async function spawnAgentSession(agentName, task) {
     // Devil's Advocate면 강제 프롬프트 적용
     const isDA = isDevilsAdvocate(agentName);
     const basePrompt = agentConfig?.prompt_append || "";
+    // 한국어 프리셋 감지 및 프롬프트 적용 (차별화 기능 1)
+    let koreanPromptAddon = "";
+    if (teamId) {
+        const team = teams.get(teamId);
+        if (team) {
+            if (team.preset === "korean-review") {
+                koreanPromptAddon = KOREAN_REVIEW_PROMPT;
+            }
+            else if (team.preset === "korean-debate" || team.preset === "debate") {
+                koreanPromptAddon = KOREAN_DEBATE_PROMPT;
+            }
+        }
+    }
+    // 시스템 프롬프트 구성
     const effectiveSystemPrompt = isDA
         ? basePrompt + "\n\n" + DEVILS_ADVOCATE_PROMPT
-        : basePrompt;
+        : koreanPromptAddon
+            ? basePrompt + "\n\n" + koreanPromptAddon
+            : basePrompt;
+    // SendMessage: 다른 에이전트의 결과를 컨텍스트에 추가
+    let fullTask = task;
+    if (teamId) {
+        const agentContext = formatAgentContext(teamId, agentName);
+        if (agentContext && !agentContext.includes("아직 없습니다")) {
+            fullTask = `${task}\n\n## 다른 팀원들의 결과:\n${agentContext}\n\n이 정보를 고려하여 작업을 수행하세요.`;
+        }
+    }
     const promptBody = {
-        parts: [{ type: "text", text: task }],
+        parts: [{ type: "text", text: fullTask }],
         agent: agentName,
     };
     if (effectiveSystemPrompt) {
@@ -227,7 +729,7 @@ async function spawnAgentSession(agentName, task) {
             promptBody.model = { providerID: parts[0], modelID: parts.slice(1).join("/") };
         }
         else {
-            console.warn(`[agent-teams] Invalid model format "${agentConfig.model}", expected "provider/model"`);
+            console.warn(`[squad] Invalid model format "${agentConfig.model}", expected "provider/model"`);
         }
     }
     await globalClient.session.prompt({
@@ -277,7 +779,7 @@ async function cleanupSession(sessionID) {
     }
     catch (error) {
         const errorMessage = error instanceof Error ? error.message : String(error);
-        console.warn(`[agent-teams] Failed to cleanup session ${sessionID}: ${errorMessage}`);
+        console.warn(`[squad] Failed to cleanup session ${sessionID}: ${errorMessage}`);
     }
 }
 // ============================================================================
@@ -361,21 +863,41 @@ function findCyclicDependencies(team) {
     }
     return cyclic;
 }
-async function executeAgent(name, agent, task, timeout) {
+/**
+ * 에이전트 실행 함수 - SendMessage 프로토콜 지원
+ * @param name 에이전트 이름
+ * @param agent 에이전트 객체
+ * @param task 작업 내용
+ * @param timeout 타임아웃(ms)
+ * @param teamId 팀 ID (메시지 방송용)
+ */
+async function executeAgent(name, agent, task, timeout, teamId) {
     agent.status = "thinking";
     try {
         const prompt = `${task}\n\n당신은 ${name}(${agent.role}) 역할입니다. 전문성으로 작업을 수행해주세요.`;
-        const { sessionID } = await spawnAgentSession(name, prompt);
+        const { sessionID } = await spawnAgentSession(name, prompt, teamId);
         agent.sessionID = sessionID;
         agent.status = "responding";
         const result = await waitForSessionCompletion(sessionID, timeout);
         agent.status = "completed";
         agent.result = result;
+        // Reputation: 에이전트 평판 업데이트
+        updateAgentReputation(name, true);
+        // SendMessage: 팀원들에게 결과 방송
+        if (teamId) {
+            broadcastAgentResult(teamId, name, result, true);
+        }
         return { name, success: true, result };
     }
     catch (error) {
         agent.status = "error";
         agent.error = error instanceof Error ? error.message : String(error);
+        // Reputation: 실패도 기록
+        updateAgentReputation(name, false);
+        // SendMessage: 실패 메시지도 방송
+        if (teamId) {
+            broadcastAgentResult(teamId, name, agent.error, false);
+        }
         return { name, success: false, error: agent.error };
     }
 }
@@ -383,8 +905,9 @@ function formatExecutionResults(team, results) {
     let response = `---\n\n## Results\n\n`;
     for (const { name, success, result, error } of results) {
         const agent = team.agents.get(name);
+        const reputation = formatReputation(name);
         const statusIcon = success ? "[OK]" : "[FAIL]";
-        response += `### ${statusIcon} ${name}\n`;
+        response += `### ${statusIcon} ${name} ${reputation}\n`;
         response += `**Status**: ${agent?.status ?? "unknown"}\n`;
         if (success && result) {
             response += `\n${truncateText(result, MAX_RESULT_LENGTH)}\n`;
@@ -413,6 +936,10 @@ const PRESETS = {
     fullstack: ["fullstack-developer", "devil-s-advocate"],
     research: ["explore", "data-scientist", "devil-s-advocate"],
     ai: ["ai-engineer", "llm-architect", "prompt-engineer", "devil-s-advocate"],
+    // Korean-optimized presets (차별화 기능 1)
+    "korean-review": ["code-reviewer", "devil-s-advocate"],
+    "korean-debate": ["planner", "devil-s-advocate"],
+    debate: ["planner", "devil-s-advocate", "security-auditor"],
 };
 const PRESET_KEYWORDS = {
     security: ["security", "보안", "취약점"],
@@ -420,6 +947,10 @@ const PRESET_KEYWORDS = {
     planning: ["planning", "계획", "설계"],
     implementation: ["implement", "구현", "개발"],
     research: ["research", "조사", "탐색"],
+    // Korean keywords (차별화 기능 1)
+    "korean-review": ["한국어", "korean", "리뷰"],
+    "korean-debate": ["토론", "debate", "한국어"],
+    debate: ["토론", "debate", "논의"],
 };
 function detectPreset(request) {
     const lowerRequest = request.toLowerCase();
@@ -498,7 +1029,7 @@ const teamSpawnTool = tool({
     },
 });
 const teamExecuteTool = tool({
-    description: "Execute team agents in parallel and collect results",
+    description: "Execute team agents in parallel and collect results with SendMessage protocol",
     args: {
         teamId: z.string().describe("Team ID to execute"),
         timeout: z.number().optional().describe("Timeout in seconds per agent"),
@@ -517,10 +1048,13 @@ const teamExecuteTool = tool({
         }
         const timeout = (args.timeout ?? DEFAULT_TIMEOUT_SECONDS) * 1000;
         team.results = new Map();
+        // 팀 메시지 큐 정리
+        clearTeamMessages(args.teamId);
         let response = `## Executing Team "${team.name}"\n\n`;
         response += `**Task**: ${team.task}\n`;
         response += `**Agents**: ${team.agents.size}\n\n`;
-        const executionPromises = Array.from(team.agents.entries()).map(([name, agent]) => executeAgent(name, agent, team.task, timeout));
+        // SendMessage 프로토콜 사용: teamId 전달
+        const executionPromises = Array.from(team.agents.entries()).map(([name, agent]) => executeAgent(name, agent, team.task, timeout, args.teamId));
         const results = await Promise.allSettled(executionPromises);
         const settledResults = results.map((r, index) => {
             const agentName = Array.from(team.agents.keys())[index];
@@ -533,12 +1067,18 @@ const teamExecuteTool = tool({
                 error: r.reason instanceof Error ? r.reason.message : String(r.reason),
             };
         });
+        // 결과 저장
+        for (const result of settledResults) {
+            if (result.success && result.result) {
+                team.results.set(result.name, result.result);
+            }
+        }
         response += formatExecutionResults(team, settledResults);
         return response;
     },
 });
 const teamDiscussTool = tool({
-    description: "Run a discussion between team agents with context sharing",
+    description: "Run a discussion between team agents with context sharing via SendMessage protocol",
     args: {
         teamId: z.string().describe("Team ID"),
         topic: z.string().describe("Discussion topic"),
@@ -553,16 +1093,19 @@ const teamDiscussTool = tool({
             return `Error: Team ${args.teamId} not found`;
         }
         const rounds = Math.min(Math.max(args.rounds ?? 2, 1), 3);
-        let contextSoFar = "";
         let response = `## Discussion: ${truncateText(args.topic, 100)}\n\n`;
         response += `**Team**: ${team.name}\n`;
         response += `**Rounds**: ${rounds}\n\n`;
+        // 팀 메시지 큐 정리 (새 토론 시작)
+        clearTeamMessages(args.teamId);
         for (let r = 1; r <= rounds; r++) {
             response += `### Round ${r}\n\n`;
             for (const [name, agent] of team.agents) {
+                // SendMessage 프로토콜을 사용한 컨텍스트 수집
+                const agentContext = formatAgentContext(args.teamId, name);
                 const prompt = r === 1
                     ? `${args.topic}\n\n당신은 ${name} 역할입니다. 분석해주세요.`
-                    : `${args.topic}\n\n## 이전 분석:\n${contextSoFar}\n\n## 추가 분석:\n${name}으로서 새로운 관점을 제시해주세요.`;
+                    : `${args.topic}\n\n## 다른 에이전트 의견:\n${agentContext}\n\n## 추가 분석:\n${name}으로서 새로운 관점이나 반론을 제시하세요. 다른 에이전트가 놓친 점을 찾아주세요.`;
                 try {
                     agent.status = "thinking";
                     const { sessionID } = await spawnAgentSession(name, prompt);
@@ -571,13 +1114,16 @@ const teamDiscussTool = tool({
                     const result = await waitForSessionCompletion(sessionID, DEFAULT_TIMEOUT_MS);
                     agent.status = "completed";
                     agent.result = result;
-                    contextSoFar += `\n### ${name} (Round ${r}):\n${truncateText(result, MAX_CONTEXT_LENGTH)}\n`;
+                    // SendMessage: 결과를 팀원들에게 방송
+                    broadcastAgentResult(args.teamId, name, result, true);
                     response += `**${name}**:\n`;
                     response += `${truncateText(result, MAX_DISCUSSION_RESULT_LENGTH)}\n\n`;
                 }
                 catch (error) {
                     agent.status = "error";
                     agent.error = error instanceof Error ? error.message : String(error);
+                    // SendMessage: 실패 메시지도 방송
+                    broadcastAgentResult(args.teamId, name, agent.error, false);
                     response += `**${name}**: [FAIL] Error - ${agent.error}\n\n`;
                 }
             }
@@ -664,9 +1210,10 @@ const teamShutdownTool = tool({
     },
 });
 const teamAutoTool = tool({
-    description: "Natural language team request with auto preset detection and execution",
+    description: "Natural language team request with auto preset detection, parallel execution, and discussion via SendMessage protocol",
     args: {
         request: z.string().describe("Natural language request"),
+        rounds: z.number().optional().describe("Discussion rounds (default: 2, max: 3)"),
     },
     async execute(args) {
         if (!globalClient) {
@@ -676,6 +1223,7 @@ const teamAutoTool = tool({
         const teamId = `team-${Date.now()}-${randomUUID().slice(0, 8)}`;
         const agentNames = PRESETS[preset] ?? PRESETS[DEFAULT_PRESET];
         const availableAgents = loadOpenCodeAgents();
+        const rounds = Math.min(Math.max(args.rounds ?? 2, 1), 3);
         const team = {
             id: teamId,
             name: `auto-${preset}`,
@@ -698,42 +1246,91 @@ const teamAutoTool = tool({
         saveTeam(team);
         let r = `## Auto Team Created\n\n`;
         r += `**Detected Preset**: ${preset}\n`;
-        r += `**Team ID**: ${teamId}\n\n`;
+        r += `**Team ID**: ${teamId}\n`;
+        r += `**Rounds**: ${rounds}\n\n`;
         r += `### Members\n`;
         for (const [n, a] of team.agents) {
-            const isDA = n === "devil-s-advocate" ? " [DEVIL]" : "";
+            const isDA = isDevilsAdvocate(n) ? " [DEVIL]" : "";
             r += `- **${n}** (${a.role})${isDA}\n`;
         }
         r += `\n### Task\n${args.request}\n\n`;
-        r += `---\n\n## Executing...\n\n`;
-        const executionPromises = Array.from(team.agents.entries()).map(([name, agent]) => executeAgent(name, agent, args.request, DEFAULT_TIMEOUT_SECONDS * 1000));
-        const results = await Promise.allSettled(executionPromises);
-        const settledResults = results.map((res, index) => {
-            const agentName = Array.from(team.agents.keys())[index];
-            if (res.status === "fulfilled") {
-                return res.value;
+        r += `---\n\n`;
+        // 라운드별 실행
+        for (let round = 1; round <= rounds; round++) {
+            r += `## Round ${round}\n\n`;
+            if (round === 1) {
+                // 라운드 1: 병렬 실행 (SendMessage 프로토콜 사용)
+                r += `*병렬 분석*\n\n`;
+                const executionPromises = Array.from(team.agents.entries()).map(([name, agent]) => executeAgent(name, agent, args.request, DEFAULT_TIMEOUT_SECONDS * 1000, teamId));
+                const results = await Promise.allSettled(executionPromises);
+                const settledResults = results.map((res, index) => {
+                    const agentName = Array.from(team.agents.keys())[index];
+                    if (res.status === "fulfilled") {
+                        return res.value;
+                    }
+                    return {
+                        name: agentName,
+                        success: false,
+                        error: res.reason instanceof Error ? res.reason.message : String(res.reason),
+                    };
+                });
+                // 결과 저장
+                for (const { name, success, result, error } of settledResults) {
+                    const statusIcon = success ? "[OK]" : "[FAIL]";
+                    r += `### ${statusIcon} ${name}\n`;
+                    if (success && result) {
+                        r += `${truncateText(result, MAX_RESULT_LENGTH)}\n`;
+                    }
+                    else if (error) {
+                        r += `**Error**: ${error}\n`;
+                    }
+                    r += `\n`;
+                }
+                team.results = new Map(settledResults
+                    .filter((res) => res.success && res.result !== undefined)
+                    .map((res) => [res.name, res.result]));
             }
-            return {
-                name: agentName,
-                success: false,
-                error: res.reason instanceof Error ? res.reason.message : String(res.reason),
-            };
-        });
-        team.results = new Map(settledResults
-            .filter((res) => res.success && res.result !== undefined)
-            .map((res) => [res.name, res.result]));
-        saveTeam(team);
-        for (const { name, success, result, error } of settledResults) {
-            const statusIcon = success ? "[OK]" : "[FAIL]";
-            r += `### ${statusIcon} ${name}\n`;
-            if (success && result) {
-                r += `${truncateText(result, 1500)}\n`;
+            else {
+                // 라운드 2+: 순차 토론 (SendMessage 프로토콜로 컨텍스트 공유)
+                r += `*토론 (다른 에이전트 결과 공유)*\n\n`;
+                for (const [name, agent] of team.agents) {
+                    // SendMessage 프로토콜을 사용한 컨텍스트 수집
+                    const agentContext = formatAgentContext(teamId, name);
+                    const discussPrompt = `${args.request}
+
+## 다른 에이전트 분석 결과:
+${agentContext || "(아직 없음)"}
+
+## 당신의 추가 분석:
+이전 분석을 바탕으로 새로운 관점이나 반론을 제시하세요. 중복을 피하고, 다른 에이전트가 놓친 점을 찾으세요.`;
+                    try {
+                        agent.status = "thinking";
+                        const { sessionID } = await spawnAgentSession(name, discussPrompt);
+                        agent.sessionID = sessionID;
+                        agent.status = "responding";
+                        const result = await waitForSessionCompletion(sessionID, DEFAULT_TIMEOUT_MS);
+                        agent.status = "completed";
+                        agent.result = result;
+                        // SendMessage: 결과를 팀원들에게 방송
+                        broadcastAgentResult(teamId, name, result, true);
+                        r += `**${name}**:\n${truncateText(result, MAX_DISCUSSION_RESULT_LENGTH)}\n\n`;
+                        // 컨텍스트 업데이트
+                        if (team.results) {
+                            team.results.set(name, result);
+                        }
+                    }
+                    catch (error) {
+                        agent.status = "error";
+                        agent.error = error instanceof Error ? error.message : String(error);
+                        // SendMessage: 실패 메시지도 방송
+                        broadcastAgentResult(teamId, name, agent.error, false);
+                        r += `**${name}**: [FAIL] ${agent.error}\n\n`;
+                    }
+                }
             }
-            else if (error) {
-                r += `**Error**: ${error}\n`;
-            }
-            r += `\n---\n\n`;
+            r += `---\n\n`;
         }
+        saveTeam(team);
         r += `**Team ID**: ${teamId}`;
         return r;
     },
@@ -961,11 +1558,693 @@ const taskUpdateTool = tool({
     }
 });
 // ============================================================================
+// PLAN APPROVAL TOOLS
+// ============================================================================
+const planSubmitTool = tool({
+    description: "Submit a plan for leader approval before execution",
+    args: {
+        agentId: z.string().describe("Agent ID submitting the plan"),
+        agentName: z.string().describe("Agent name submitting the plan"),
+        content: z.string().describe("Plan content/description"),
+    },
+    async execute(args) {
+        const plan = createPlan(args.agentId, args.agentName, args.content);
+        let response = `## Plan Submitted for Approval\n\n`;
+        response += `**Plan ID**: ${plan.id}\n`;
+        response += `**Agent**: ${plan.agentName} (${plan.agentId})\n`;
+        response += `**Status**: ${plan.status}\n`;
+        response += `**Submitted**: ${plan.submittedAt.toISOString()}\n\n`;
+        response += `### Plan Content\n`;
+        response += `${plan.content}\n\n`;
+        response += `---\n`;
+        response += `Waiting for leader approval. Use \`/plan-approve planId="${plan.id}"\` or \`/plan-reject planId="${plan.id}"\`\n`;
+        return response;
+    },
+});
+const planApproveTool = tool({
+    description: "Approve a submitted plan, allowing the agent to proceed with execution",
+    args: {
+        planId: z.string().describe("Plan ID to approve"),
+    },
+    async execute(args) {
+        const plan = updatePlanStatus(args.planId, "approved");
+        if (!plan) {
+            return `Error: Plan ${args.planId} not found`;
+        }
+        let response = `## Plan Approved\n\n`;
+        response += `**Plan ID**: ${plan.id}\n`;
+        response += `**Agent**: ${plan.agentName}\n`;
+        response += `**Status**: ${plan.status}\n`;
+        response += `**Approved At**: ${plan.reviewedAt?.toISOString()}\n\n`;
+        response += `### Approved Plan\n`;
+        response += `${plan.content}\n\n`;
+        response += `---\n`;
+        response += `The agent may now proceed with execution.\n`;
+        return response;
+    },
+});
+const planRejectTool = tool({
+    description: "Reject a submitted plan with feedback, requiring the agent to revise",
+    args: {
+        planId: z.string().describe("Plan ID to reject"),
+        feedback: z.string().describe("Reason for rejection and improvement suggestions"),
+    },
+    async execute(args) {
+        const plan = updatePlanStatus(args.planId, "rejected", args.feedback);
+        if (!plan) {
+            return `Error: Plan ${args.planId} not found`;
+        }
+        let response = `## Plan Rejected\n\n`;
+        response += `**Plan ID**: ${plan.id}\n`;
+        response += `**Agent**: ${plan.agentName}\n`;
+        response += `**Status**: ${plan.status}\n`;
+        response += `**Rejected At**: ${plan.reviewedAt?.toISOString()}\n\n`;
+        response += `### Feedback\n`;
+        response += `${args.feedback}\n\n`;
+        response += `---\n`;
+        response += `The agent should revise the plan and resubmit.\n`;
+        return response;
+    },
+});
+const planListTool = tool({
+    description: "List all plans with their status",
+    args: {
+        status: z.enum(["pending", "approved", "rejected"]).optional().describe("Filter by status"),
+        agentId: z.string().optional().describe("Filter by agent ID"),
+    },
+    async execute(args) {
+        let filteredPlans = Array.from(plans.values());
+        if (args.status) {
+            filteredPlans = filteredPlans.filter(p => p.status === args.status);
+        }
+        if (args.agentId) {
+            filteredPlans = filteredPlans.filter(p => p.agentId === args.agentId);
+        }
+        if (filteredPlans.length === 0) {
+            return "No plans found.";
+        }
+        let response = `## Plans (${filteredPlans.length})\n\n`;
+        for (const plan of filteredPlans) {
+            const statusIcon = {
+                pending: "[PENDING]",
+                approved: "[APPROVED]",
+                rejected: "[REJECTED]",
+            };
+            response += `${statusIcon[plan.status]} **${plan.id}**\n`;
+            response += `- Agent: ${plan.agentName} (${plan.agentId})\n`;
+            response += `- Status: ${plan.status}\n`;
+            response += `- Submitted: ${plan.submittedAt.toISOString()}\n`;
+            if (plan.feedback) {
+                response += `- Feedback: ${plan.feedback}\n`;
+            }
+            response += `\n### Content\n`;
+            response += `${truncateText(plan.content, 300)}\n\n`;
+            response += `---\n\n`;
+        }
+        return response;
+    },
+});
+const planStatusTool = tool({
+    description: "Get detailed status of a specific plan",
+    args: {
+        planId: z.string().describe("Plan ID"),
+    },
+    async execute(args) {
+        const plan = getPlan(args.planId);
+        if (!plan) {
+            return `Error: Plan ${args.planId} not found`;
+        }
+        let response = `## Plan Details\n\n`;
+        response += `**Plan ID**: ${plan.id}\n`;
+        response += `**Agent**: ${plan.agentName} (${plan.agentId})\n`;
+        response += `**Status**: ${plan.status}\n`;
+        response += `**Submitted**: ${plan.submittedAt.toISOString()}\n`;
+        if (plan.reviewedAt) {
+            response += `**Reviewed**: ${plan.reviewedAt.toISOString()}\n`;
+        }
+        response += `\n### Plan Content\n`;
+        response += `${plan.content}\n`;
+        if (plan.feedback) {
+            response += `\n### Feedback\n`;
+            response += `${plan.feedback}\n`;
+        }
+        return response;
+    },
+});
+const planResubmitTool = tool({
+    description: "Resubmit a rejected plan with revisions",
+    args: {
+        planId: z.string().describe("Original plan ID to resubmit"),
+        content: z.string().describe("Revised plan content"),
+    },
+    async execute(args) {
+        const originalPlan = getPlan(args.planId);
+        if (!originalPlan) {
+            return `Error: Plan ${args.planId} not found`;
+        }
+        if (originalPlan.status !== "rejected") {
+            return `Error: Can only resubmit rejected plans. Current status: ${originalPlan.status}`;
+        }
+        const newPlan = createPlan(originalPlan.agentId, originalPlan.agentName, args.content);
+        let response = `## Plan Resubmitted\n\n`;
+        response += `**New Plan ID**: ${newPlan.id}\n`;
+        response += `**Original Plan ID**: ${originalPlan.id}\n`;
+        response += `**Agent**: ${newPlan.agentName}\n`;
+        response += `**Status**: ${newPlan.status}\n`;
+        response += `**Previous Feedback**: ${originalPlan.feedback || "None"}\n\n`;
+        response += `### Revised Content\n`;
+        response += `${newPlan.content}\n\n`;
+        response += `---\n`;
+        response += `Waiting for leader approval.\n`;
+        return response;
+    },
+});
+// ============================================================================
+// REPUTATION TOOLS
+// ============================================================================
+const agentReputationTool = tool({
+    description: "Get agent reputation information",
+    args: {
+        agentName: z.string().describe("Agent name to get reputation for"),
+    },
+    async execute(args) {
+        const reputation = getAgentReputation(args.agentName);
+        const successRate = reputation.totalTasks > 0
+            ? ((reputation.successfulTasks / reputation.totalTasks) * 100).toFixed(1)
+            : "N/A";
+        let response = `## Agent Reputation: ${args.agentName}\n\n`;
+        response += `**Total Tasks**: ${reputation.totalTasks}\n`;
+        response += `**Successful Tasks**: ${reputation.successfulTasks}\n`;
+        response += `**Success Rate**: ${successRate}%\n`;
+        response += `**Average Score**: ${reputation.averageScore.toFixed(1)}\n`;
+        response += `**Last Updated**: ${reputation.lastUpdated.toISOString()}\n`;
+        return response;
+    },
+});
+const agentScoreTool = tool({
+    description: "Score an agent's performance",
+    args: {
+        agentName: z.string().describe("Agent name to score"),
+        score: z.number().min(1).max(10).describe("Score from 1-10"),
+        feedback: z.string().describe("Feedback for the score"),
+        scoredBy: z.string().describe("Who is scoring this agent"),
+    },
+    async execute(args) {
+        addAgentScore(args.agentName, args.score, args.feedback, args.scoredBy);
+        let response = `## Agent Scored\n\n`;
+        response += `**Agent**: ${args.agentName}\n`;
+        response += `**Score**: ${args.score}/10\n`;
+        response += `**Feedback**: ${args.feedback}\n`;
+        response += `**Scored By**: ${args.scoredBy}\n\n`;
+        response += `Score recorded and reputation updated.\n`;
+        return response;
+    },
+});
+const agentScoresTool = tool({
+    description: "Get all scores for an agent",
+    args: {
+        agentName: z.string().describe("Agent name to get scores for"),
+    },
+    async execute(args) {
+        const scores = getAgentScores(args.agentName);
+        if (scores.length === 0) {
+            return `No scores found for agent: ${args.agentName}`;
+        }
+        let response = `## Agent Scores: ${args.agentName}\n\n`;
+        response += `**Total Scores**: ${scores.length}\n\n`;
+        for (const s of scores) {
+            response += `### Score ${s.score}/10\n`;
+            response += `**By**: ${s.scoredBy}\n`;
+            response += `**Feedback**: ${s.feedback}\n`;
+            response += `**Date**: ${s.timestamp.toISOString()}\n\n`;
+        }
+        return response;
+    },
+});
+const agentRankingsTool = tool({
+    description: "Get agent rankings by performance",
+    args: {
+        sortBy: z.enum(["successRate", "averageScore", "totalTasks"]).optional().default("averageScore"),
+    },
+    async execute(args) {
+        const rankings = Array.from(agentReputations.entries())
+            .map(([name, rep]) => ({
+            name,
+            successRate: rep.totalTasks > 0 ? rep.successfulTasks / rep.totalTasks : 0,
+            averageScore: rep.averageScore,
+            totalTasks: rep.totalTasks,
+        }))
+            .sort((a, b) => {
+            if (args.sortBy === "successRate")
+                return b.successRate - a.successRate;
+            if (args.sortBy === "totalTasks")
+                return b.totalTasks - a.totalTasks;
+            return b.averageScore - a.averageScore;
+        });
+        if (rankings.length === 0) {
+            return `No agent rankings available yet.`;
+        }
+        let response = `## Agent Rankings (by ${args.sortBy})\n\n`;
+        rankings.forEach((r, i) => {
+            response += `**${i + 1}. ${r.name}**\n`;
+            response += `   - Success Rate: ${(r.successRate * 100).toFixed(1)}%\n`;
+            response += `   - Average Score: ${r.averageScore.toFixed(1)}\n`;
+            response += `   - Total Tasks: ${r.totalTasks}\n\n`;
+        });
+        return response;
+    },
+});
+// ============================================================================
+// VOTING SYSTEM TOOL (차별화 기능 2: 투표/합의 시스템)
+// ============================================================================
+const teamVoteTool = tool({
+    description: "Run a vote among team agents on a proposal (차별화 기능: 투표/합의 시스템)",
+    args: {
+        teamId: z.string().describe("Team ID"),
+        proposal: z.string().describe("Proposal to vote on"),
+        threshold: z.enum(["majority", "unanimous"]).optional().describe("Consensus threshold (default: majority)"),
+    },
+    async execute(args) {
+        if (!globalClient) {
+            return "Error: OpenCode client not available";
+        }
+        const team = teams.get(args.teamId);
+        if (!team) {
+            return `Error: Team ${args.teamId} not found`;
+        }
+        const threshold = args.threshold ?? "majority";
+        let response = `## 🗳️ 투표 시작 (Vote Started)\n\n`;
+        response += `**Team**: ${team.name}\n`;
+        response += `**제안 (Proposal)**: ${args.proposal}\n`;
+        response += `**합의 기준 (Threshold)**: ${threshold === "unanimous" ? "만장일치 (Unanimous)" : "다수결 (Majority)"}\n\n`;
+        const votes = [];
+        const votePromises = [];
+        for (const [name, agent] of team.agents) {
+            const votePrompt = `다음 제안에 대해 투표해주세요:
+
+## 제안 (Proposal)
+${args.proposal}
+
+## 투표 옵션
+1. **approve** (찬성) - 이 제안을 지지합니다
+2. **reject** (반대) - 이 제안에 반대합니다
+3. **abstain** (기권) - 의견을 유보합니다
+
+## 응답 형식
+**투표**: [approve/reject/abstain]
+**사유**: [간단한 이유]
+
+당신은 ${name}(${agent.role}) 역할입니다. 이 제안에 대해 투표해주세요.`;
+            const votePromise = (async () => {
+                try {
+                    agent.status = "thinking";
+                    const { sessionID } = await spawnAgentSession(name, votePrompt);
+                    agent.sessionID = sessionID;
+                    agent.status = "responding";
+                    const result = await waitForSessionCompletion(sessionID, DEFAULT_TIMEOUT_MS);
+                    agent.status = "completed";
+                    // Parse vote from result
+                    const voteMatch = result.match(/투표\s*[:：]\s*(approve|reject|abstain)/i) ||
+                        result.match(/vote\s*[:：]\s*(approve|reject|abstain)/i);
+                    const reasonMatch = result.match(/사유\s*[:：]\s*(.+)/i) ||
+                        result.match(/reason\s*[:：]\s*(.+)/i);
+                    const vote = (voteMatch?.[1]?.toLowerCase() || "abstain");
+                    const reason = reasonMatch?.[1] || truncateText(result, 200);
+                    return { name, vote, reason };
+                }
+                catch (error) {
+                    agent.status = "error";
+                    return { name, vote: "abstain", reason: "Error during voting" };
+                }
+            })();
+            votePromises.push(votePromise);
+        }
+        const voteResults = await Promise.allSettled(votePromises);
+        for (const r of voteResults) {
+            if (r.status === "fulfilled") {
+                const { name, vote, reason } = r.value;
+                votes.push({ agentName: name, vote, reason });
+            }
+        }
+        // Count votes
+        const approve = votes.filter(v => v.vote === "approve").length;
+        const reject = votes.filter(v => v.vote === "reject").length;
+        const abstain = votes.filter(v => v.vote === "abstain").length;
+        const total = votes.length;
+        // Determine consensus
+        let consensus;
+        if (threshold === "unanimous") {
+            consensus = approve === total ? "unanimous" : "no_consensus";
+        }
+        else {
+            consensus = approve > reject ? "majority" : "no_consensus";
+        }
+        // Save voting result
+        const votingResult = {
+            proposal: args.proposal,
+            votes,
+            approve,
+            reject,
+            abstain,
+            consensus,
+            timestamp: new Date(),
+        };
+        if (!votingHistory.has(args.teamId)) {
+            votingHistory.set(args.teamId, []);
+        }
+        votingHistory.get(args.teamId).push(votingResult);
+        // Format response
+        response += `---\n\n## 📊 투표 결과 (Voting Results)\n\n`;
+        const voteIcons = {
+            approve: "✅",
+            reject: "❌",
+            abstain: "⚪",
+        };
+        for (const v of votes) {
+            const icon = voteIcons[v.vote] || "⚪";
+            response += `${icon} **${v.agentName}**: ${v.vote}`;
+            if (v.reason) {
+                response += `\n   _${v.reason}_`;
+            }
+            response += `\n\n`;
+        }
+        response += `---\n\n## 📈 집계 (Summary)\n\n`;
+        response += `| 찬성 (Approve) | 반대 (Reject) | 기권 (Abstain) | 합계 (Total) |\n`;
+        response += `|:-------------:|:-------------:|:--------------:|:-------------:|\n`;
+        response += `| ${approve} | ${reject} | ${abstain} | ${total} |\n\n`;
+        const consensusKorean = {
+            unanimous: "✅ **만장일치 합의 (Unanimous Consensus)**",
+            majority: "✅ **다수결 합의 (Majority Consensus)**",
+            "no_consensus": "❌ **합의 도달 실패 (No Consensus)**",
+        };
+        response += `**결과 (Result)**: ${consensusKorean[consensus]}\n`;
+        response += `\n---\n\n**Team ID**: ${args.teamId}`;
+        return response;
+    },
+});
+// ============================================================================
+// TEAM SCORE TOOL (차별화 기능: 팀 결과 채점)
+// ============================================================================
+const teamScoreTool = tool({
+    description: "Score an agent's performance within a team context",
+    args: {
+        teamId: z.string().describe("Team ID"),
+        agentId: z.string().describe("Agent to score"),
+        score: z.number().min(1).max(10).describe("Score from 1-10"),
+        feedback: z.string().describe("Feedback for the score"),
+    },
+    async execute(args) {
+        const team = teams.get(args.teamId);
+        if (!team) {
+            return `Error: Team ${args.teamId} not found`;
+        }
+        const agent = team.agents.get(args.agentId);
+        if (!agent) {
+            return `Error: Agent ${args.agentId} not found in team`;
+        }
+        // Add score using existing scoring system
+        addAgentScore(args.agentId, args.score, args.feedback, "team-lead");
+        // Get updated reputation
+        const reputation = getAgentReputation(args.agentId);
+        const successRate = reputation.totalTasks > 0
+            ? ((reputation.successfulTasks / reputation.totalTasks) * 100).toFixed(1)
+            : "N/A";
+        let response = `## 📊 Agent Scored\n\n`;
+        response += `**Team**: ${team.name}\n`;
+        response += `**Agent**: ${args.agentId}\n`;
+        response += `**Score**: ${args.score}/10\n`;
+        response += `**Feedback**: ${args.feedback}\n\n`;
+        response += `---\n\n`;
+        response += `## Updated Reputation\n\n`;
+        response += `**Average Score**: ${reputation.averageScore.toFixed(1)}/10\n`;
+        response += `**Success Rate**: ${successRate}%\n`;
+        response += `**Total Tasks**: ${reputation.totalTasks}\n`;
+        return response;
+    },
+});
+// ============================================================================
+// SUMMARY BOT TOOL (차별화 기능 4: 종합 보고서 봇)
+// ============================================================================
+const teamSummarizeTool = tool({
+    description: "Generate a comprehensive summary report from all team discussions and results (차별화 기능: 종합 보고서 봇)",
+    args: {
+        teamId: z.string().describe("Team ID"),
+        language: z.enum(["korean", "english"]).optional().describe("Summary language (default: korean)"),
+    },
+    async execute(args) {
+        if (!globalClient) {
+            return "Error: OpenCode client not available";
+        }
+        const team = teams.get(args.teamId);
+        if (!team) {
+            return `Error: Team ${args.teamId} not found`;
+        }
+        const language = args.language ?? "korean";
+        const isKorean = language === "korean";
+        // Collect all agent results
+        const agentResults = Array.from(team.agents.entries())
+            .filter(([_, agent]) => agent.result)
+            .map(([name, agent]) => `### ${name}\n${agent.result}`)
+            .join("\n\n");
+        if (!agentResults) {
+            return isKorean
+                ? "Error: 분석 결과가 없습니다. 먼저 에이전트를 실행하세요."
+                : "Error: No results found. Run agents first.";
+        }
+        // Use a planner agent or the first available agent for summary
+        const summaryAgentName = team.agents.has("planner") ? "planner" : Array.from(team.agents.keys())[0];
+        const summaryPrompt = isKorean
+            ? `${SUMMARY_BOT_PROMPT}
+
+## 팀 정보
+- **팀명**: ${team.name}
+- **작업**: ${team.task}
+
+## 에이전트별 결과
+${agentResults}
+
+위 모든 에이전트의 결과를 분석하여 종합 보고서를 작성하세요.`
+            : `You are a comprehensive report writer.
+
+## Team Information
+- **Team**: ${team.name}
+- **Task**: ${team.task}
+
+## Agent Results
+${agentResults}
+
+Analyze all agent results and create a comprehensive summary report with:
+1. **Executive Summary**: Key conclusions
+2. **Agent Opinions Table**: Summary of each agent's position
+3. **Agreed Items**: What everyone agreed on
+4. **Disputed Items**: Where opinions differed
+5. **Risks/Issues Found**: With severity and proposed solutions
+6. **Next Steps**: Specific action items`;
+        try {
+            const agent = team.agents.get(summaryAgentName);
+            if (!agent) {
+                return "Error: No agent available for summary";
+            }
+            agent.status = "thinking";
+            const { sessionID } = await spawnAgentSession(summaryAgentName, summaryPrompt);
+            agent.sessionID = sessionID;
+            agent.status = "responding";
+            const summary = await waitForSessionCompletion(sessionID, DEFAULT_TIMEOUT_MS);
+            agent.status = "completed";
+            let response = isKorean
+                ? `## 📋 종합 보고서 (Summary Report)\n\n`
+                : `## 📋 Summary Report\n\n`;
+            response += `**Team**: ${team.name}\n`;
+            response += `**Task**: ${team.task}\n`;
+            response += `**Generated**: ${new Date().toISOString()}\n\n`;
+            response += `---\n\n`;
+            response += summary;
+            return response;
+        }
+        catch (error) {
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            return `Error generating summary: ${errorMessage}`;
+        }
+    },
+});
+// ============================================================================
+// AGENT HANDOFF TOOL (차별화 기능: 에이전트 간 작업 위임)
+// ============================================================================
+const agentHandoffTool = tool({
+    description: "Allow agents to delegate tasks to each other mid-execution (차별화 기능: 에이전트 핸드오프)",
+    args: {
+        teamId: z.string().describe("Team ID"),
+        fromAgent: z.string().describe("Agent delegating the task"),
+        toAgent: z.string().describe("Agent receiving the delegation"),
+        task: z.string().describe("Task to delegate"),
+        reason: z.string().describe("Reason for delegation"),
+    },
+    async execute(args) {
+        const team = teams.get(args.teamId);
+        if (!team) {
+            return `Error: Team ${args.teamId} not found`;
+        }
+        const fromAgent = team.agents.get(args.fromAgent);
+        const toAgent = team.agents.get(args.toAgent);
+        if (!fromAgent || !toAgent) {
+            return `Error: One or both agents not found in team`;
+        }
+        // Record handoff
+        const handoff = {
+            fromAgent: args.fromAgent,
+            toAgent: args.toAgent,
+            task: args.task,
+            reason: args.reason,
+            timestamp: new Date(),
+        };
+        handoffRequests.set(`${args.teamId}-${Date.now()}`, handoff);
+        // Execute the delegated task
+        try {
+            toAgent.status = "thinking";
+            const { sessionID } = await spawnAgentSession(args.toAgent, args.task);
+            toAgent.sessionID = sessionID;
+            toAgent.status = "responding";
+            const result = await waitForSessionCompletion(sessionID, DEFAULT_TIMEOUT_MS);
+            toAgent.status = "completed";
+            toAgent.result = result;
+            let response = `## 🔄 Agent Handoff\n\n`;
+            response += `**From**: ${args.fromAgent}\n`;
+            response += `**To**: ${args.toAgent}\n`;
+            response += `**Reason**: ${args.reason}\n\n`;
+            response += `### Delegated Task\n${args.task}\n\n`;
+            response += `### Result\n${truncateText(result, MAX_RESULT_LENGTH)}\n`;
+            return response;
+        }
+        catch (error) {
+            toAgent.status = "error";
+            const errorMessage = error instanceof Error ? error.message : String(error);
+            return `Error during handoff: ${errorMessage}`;
+        }
+    },
+});
+// ============================================================================
+// CONFLICT RESOLUTION TOOL (차별화 기능: 구조화된 충돌 해결)
+// ============================================================================
+const conflictResolveTool = tool({
+    description: "Structured debate format when agents disagree (차별화 기능: 충돌 해결)",
+    args: {
+        teamId: z.string().describe("Team ID"),
+        topic: z.string().describe("Topic of disagreement"),
+        positions: z.array(z.object({
+            agent: z.string().describe("Agent name"),
+            position: z.string().describe("Agent's position"),
+        })).describe("Each agent's position on the topic"),
+    },
+    async execute(args) {
+        const team = teams.get(args.teamId);
+        if (!team) {
+            return `Error: Team ${args.teamId} not found`;
+        }
+        // Record conflict
+        const conflict = {
+            topic: args.topic,
+            agents: args.positions.map(p => p.agent),
+            positions: args.positions.map(p => p.position),
+            timestamp: new Date(),
+            resolved: false,
+        };
+        conflicts.set(`${args.teamId}-${Date.now()}`, conflict);
+        let response = `## ⚖️ Conflict Resolution: ${args.topic}\n\n`;
+        // Phase 1: Present positions
+        response += `### Phase 1: Positions\n\n`;
+        for (const pos of args.positions) {
+            response += `**${pos.agent}**: ${pos.position}\n\n`;
+        }
+        // Phase 2: Devil's Advocate critique
+        const daAgent = Array.from(team.agents.values()).find(a => isDevilsAdvocate(a.name));
+        if (daAgent) {
+            response += `### Phase 2: Devil's Advocate Critique\n\n`;
+            const critiquePrompt = `다음 주제에 대해 에이전트들이 서로 다른 의견을 가지고 있습니다:
+
+## 주제: ${args.topic}
+
+## 각 에이전트 입장:
+${args.positions.map(p => `- ${p.agent}: ${p.position}`).join('\n')}
+
+## Devil's Advocate 역할
+위 입장들에 대해 비판적 분석을 하세요:
+1. 각 입장의 약점
+2. 놓친 관점
+3. 더 나은 대안
+
+반드시 비판적이어야 합니다.`;
+            try {
+                const { sessionID } = await spawnAgentSession(daAgent.name, critiquePrompt);
+                const critique = await waitForSessionCompletion(sessionID, DEFAULT_TIMEOUT_MS);
+                response += `**${daAgent.name}**:\n${truncateText(critique, MAX_RESULT_LENGTH)}\n\n`;
+            }
+            catch (error) {
+                response += `[Devil's Advocate 분석 실패]\n\n`;
+            }
+        }
+        // Phase 3: Proposed resolution
+        response += `### Phase 3: Proposed Resolution\n\n`;
+        response += `Use \`/team-vote\` to vote on the best approach.\n`;
+        response += `\n---\n\n**Team ID**: ${args.teamId}`;
+        return response;
+    },
+});
+// ============================================================================
+// DEVIL'S ADVOCATE AUTO CRITIQUE TOOL (차별화 기능: 자동 반론 생성)
+// ============================================================================
+const daCritiqueTool = tool({
+    description: "Devil's Advocate automatically critiques other agents' results (차별화 기능: 자동 반론 생성)",
+    args: {
+        teamId: z.string().describe("Team ID"),
+        targetAgent: z.string().describe("Agent to critique (omit for all agents)"),
+    },
+    async execute(args) {
+        if (!globalClient) {
+            return "Error: OpenCode client not available";
+        }
+        const team = teams.get(args.teamId);
+        if (!team) {
+            return `Error: Team ${args.teamId} not found`;
+        }
+        // Check if Devil's Advocate exists in team
+        const daAgent = Array.from(team.agents.values()).find(a => isDevilsAdvocate(a.name));
+        if (!daAgent) {
+            return "Error: No Devil's Advocate in team. Add one to use auto-critique.";
+        }
+        let response = `## 🚨 Devil's Advocate Auto-Critique\n\n`;
+        response += `**Team**: ${team.name}\n`;
+        response += `**Devil's Advocate**: ${daAgent.name}\n\n`;
+        // Determine which agents to critique
+        const agentsToCritique = args.targetAgent
+            ? [[args.targetAgent, team.agents.get(args.targetAgent)]].filter(([, a]) => a)
+            : Array.from(team.agents.entries()).filter(([name]) => !isDevilsAdvocate(name));
+        if (agentsToCritique.length === 0) {
+            return "Error: No agents to critique (agent not found or only DA in team)";
+        }
+        // Generate critiques
+        for (const [name, agent] of agentsToCritique) {
+            if (!agent?.result) {
+                response += `### ${name}\n[No results to critique]\n\n`;
+                continue;
+            }
+            response += `### 🎯 Critique: ${name}\n\n`;
+            const critique = await generateDevilsAdvocateCritique(name, agent.result, team);
+            response += `${truncateText(critique, MAX_RESULT_LENGTH)}\n\n`;
+            response += `---\n\n`;
+        }
+        response += `**Team ID**: ${args.teamId}`;
+        return response;
+    },
+});
+// ============================================================================
 // PLUGIN EXPORT
 // ============================================================================
 const plugin = async (input) => {
     globalClient = input.client;
     loadOpenCodeAgents();
+    loadPlans();
+    loadReputations();
+    loadScores();
     return {
         tool: {
             "team-spawn": teamSpawnTool,
@@ -978,6 +2257,23 @@ const plugin = async (input) => {
             "task-update": taskUpdateTool,
             "task-execute": taskExecuteTool,
             "task-list": taskListTool,
+            "plan-submit": planSubmitTool,
+            "plan-approve": planApproveTool,
+            "plan-reject": planRejectTool,
+            "plan-list": planListTool,
+            "plan-status": planStatusTool,
+            "plan-resubmit": planResubmitTool,
+            "agent-reputation": agentReputationTool,
+            "agent-score": agentScoreTool,
+            "agent-scores": agentScoresTool,
+            "agent-rankings": agentRankingsTool,
+            // 차별화 기능 (Differentiation features)
+            "team-vote": teamVoteTool,
+            "team-score": teamScoreTool,
+            "team-summarize": teamSummarizeTool,
+            "agent-handoff": agentHandoffTool,
+            "conflict-resolve": conflictResolveTool,
+            "da-critique": daCritiqueTool,
         },
     };
 };

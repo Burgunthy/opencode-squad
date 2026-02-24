@@ -1,5 +1,5 @@
 {
-  "name": "@opencode-ai/agent-teams",
+  "name": "@opencode-ai/squad",
   "version": "1.0.0",
   "type": "module",
   "main": "./dist/index.js",
