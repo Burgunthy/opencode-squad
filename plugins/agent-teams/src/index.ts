@@ -15,6 +15,20 @@ interface Agent {
   status: "idle" | "thinking" | "responding";
 }
 
+interface Task {
+  id: string;
+  title: string;
+  description?: string;
+  assignee?: string;
+  status: "pending" | "in_progress" | "completed" | "deleted";
+  priority: "low" | "medium" | "high" | "critical";
+  createdAt: Date;
+  completedAt?: Date;
+  blocks: string[];
+  blockedBy: string[];
+  metadata?: Record<string, any>;
+}
+
 interface Team {
   id: string;
   name: string;
@@ -31,6 +45,42 @@ interface DiscussionMessage {
   content: string;
   timestamp: Date;
   type: "statement" | "question" | "response" | "summary";
+}
+
+interface Message {
+  id: string;
+  from: string;
+  to: string | "all";
+  content: string;
+  summary?: string;
+  timestamp: Date;
+  type: "message" | "broadcast" | "shutdown_request" | "shutdown_response" | "plan_approval_response";
+  requestId?: string;
+  approve?: boolean;
+}
+
+/**
+ * Represents an active agent session with state tracking
+ */
+interface AgentSession {
+  agentName: string;
+  sessionID: string;
+  status: "idle" | "thinking" | "responding";
+  lastActivity: Date;
+  currentTask?: string;
+}
+
+/**
+ * Represents a shutdown request between agents
+ */
+interface ShutdownRequest {
+  id: string;
+  requester: string;
+  recipient: string;
+  reason: string;
+  createdAt: Date;
+  respondedAt?: Date;
+  approved?: boolean;
 }
 
 // ============================================================================
@@ -141,11 +191,508 @@ const PRESETS: Record<string, string[]> = {
 };
 
 // ============================================================================
+// SESSION MANAGER
+// ============================================================================
+
+/**
+ * Manages agent sessions with state tracking and activity monitoring.
+ * Provides centralized session lifecycle management for all agents.
+ */
+class SessionManager {
+  private sessions: Map<string, AgentSession> = new Map();
+  private agentToSessionMap: Map<string, string> = new Map(); // agentName -> sessionID
+
+  /**
+   * Register a new agent session
+   * @param agentName - The name of the agent
+   * @param sessionID - Unique session identifier
+   * @param initialStatus - Starting status (default: "idle")
+   */
+  registerSession(
+    agentName: string,
+    sessionID: string,
+    initialStatus: "idle" | "thinking" | "responding" = "idle"
+  ): void {
+    const session: AgentSession = {
+      agentName,
+      sessionID,
+      status: initialStatus,
+      lastActivity: new Date()
+    };
+    this.sessions.set(sessionID, session);
+    this.agentToSessionMap.set(agentName, sessionID);
+  }
+
+  /**
+   * Update the status of an existing session
+   * @param sessionID - The session identifier
+   * @param status - New status value
+   * @param task - Optional current task description
+   */
+  updateStatus(
+    sessionID: string,
+    status: "idle" | "thinking" | "responding",
+    task?: string
+  ): void {
+    const session = this.sessions.get(sessionID);
+    if (session) {
+      session.status = status;
+      session.lastActivity = new Date();
+      if (task !== undefined) {
+        session.currentTask = task;
+      }
+    }
+  }
+
+  /**
+   * Update status by agent name
+   * @param agentName - The name of the agent
+   * @param status - New status value
+   * @param task - Optional current task description
+   */
+  updateStatusByAgent(
+    agentName: string,
+    status: "idle" | "thinking" | "responding",
+    task?: string
+  ): void {
+    const sessionID = this.agentToSessionMap.get(agentName);
+    if (sessionID) {
+      this.updateStatus(sessionID, status, task);
+    }
+  }
+
+  /**
+   * Get session information for a specific agent
+   * @param agentName - The name of the agent
+   * @returns The agent's session or undefined if not found
+   */
+  getAgentSession(agentName: string): AgentSession | undefined {
+    const sessionID = this.agentToSessionMap.get(agentName);
+    if (sessionID) {
+      return this.sessions.get(sessionID);
+    }
+    return undefined;
+  }
+
+  /**
+   * Get session by session ID
+   * @param sessionID - The session identifier
+   * @returns The session or undefined if not found
+   */
+  getSession(sessionID: string): AgentSession | undefined {
+    return this.sessions.get(sessionID);
+  }
+
+  /**
+   * List all active sessions
+   * @returns Array of all agent sessions
+   */
+  listSessions(): AgentSession[] {
+    return Array.from(this.sessions.values());
+  }
+
+  /**
+   * List sessions filtered by status
+   * @param status - The status to filter by
+   * @returns Array of sessions with the specified status
+   */
+  listSessionsByStatus(status: "idle" | "thinking" | "responding"): AgentSession[] {
+    return Array.from(this.sessions.values()).filter(s => s.status === status);
+  }
+
+  /**
+   * Remove a session
+   * @param sessionID - The session identifier to remove
+   */
+  removeSession(sessionID: string): void {
+    const session = this.sessions.get(sessionID);
+    if (session) {
+      this.agentToSessionMap.delete(session.agentName);
+      this.sessions.delete(sessionID);
+    }
+  }
+
+  /**
+   * Remove session by agent name
+   * @param agentName - The name of the agent whose session should be removed
+   */
+  removeSessionByAgent(agentName: string): void {
+    const sessionID = this.agentToSessionMap.get(agentName);
+    if (sessionID) {
+      this.removeSession(sessionID);
+    }
+  }
+
+  /**
+   * Get the count of active sessions
+   * @returns The number of active sessions
+   */
+  getSessionCount(): number {
+    return this.sessions.size;
+  }
+
+  /**
+   * Clear all sessions (useful for testing or reset)
+   */
+  clearAllSessions(): void {
+    this.sessions.clear();
+    this.agentToSessionMap.clear();
+  }
+
+  /**
+   * Get sessions that have been inactive for a specified duration
+   * @param inactiveMs - Milliseconds of inactivity threshold
+   * @returns Array of inactive sessions
+   */
+  getInactiveSessions(inactiveMs: number): AgentSession[] {
+    const now = new Date();
+    return Array.from(this.sessions.values()).filter(
+      session => now.getTime() - session.lastActivity.getTime() > inactiveMs
+    );
+  }
+}
+
+// ============================================================================
+// SHUTDOWN MANAGER
+// ============================================================================
+
+/**
+ * Manages shutdown requests between agents with approval workflow.
+ * Handles the lifecycle of shutdown requests from creation to response.
+ */
+class ShutdownManager {
+  private requests: Map<string, ShutdownRequest> = new Map();
+  private pendingByRecipient: Map<string, Set<string>> = new Map(); // recipient -> Set<requestId>
+
+  /**
+   * Create a new shutdown request
+   * @param requester - The agent requesting the shutdown
+   * @param recipient - The agent being asked to shut down
+   * @param reason - The reason for the shutdown request
+   * @returns The unique request ID
+   */
+  createRequest(requester: string, recipient: string, reason: string): string {
+    const requestId = `shutdown-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
+    const request: ShutdownRequest = {
+      id: requestId,
+      requester,
+      recipient,
+      reason,
+      createdAt: new Date()
+    };
+
+    this.requests.set(requestId, request);
+
+    // Track pending request by recipient
+    if (!this.pendingByRecipient.has(recipient)) {
+      this.pendingByRecipient.set(recipient, new Set());
+    }
+    this.pendingByRecipient.get(recipient)!.add(requestId);
+
+    return requestId;
+  }
+
+  /**
+   * Respond to a shutdown request
+   * @param requestId - The request ID to respond to
+   * @param approved - Whether the request is approved
+   * @returns True if the response was recorded, false if request not found
+   */
+  respondToRequest(requestId: string, approved: boolean): boolean {
+    const request = this.requests.get(requestId);
+    if (!request || request.respondedAt !== undefined) {
+      return false;
+    }
+
+    request.respondedAt = new Date();
+    request.approved = approved;
+
+    // Remove from pending tracking
+    const pendingSet = this.pendingByRecipient.get(request.recipient);
+    if (pendingSet) {
+      pendingSet.delete(requestId);
+    }
+
+    return true;
+  }
+
+  /**
+   * Get all pending requests for a specific recipient
+   * @param recipient - The agent name to check for pending requests
+   * @returns Array of pending shutdown requests
+   */
+  getPendingRequests(recipient: string): ShutdownRequest[] {
+    const pendingIds = this.pendingByRecipient.get(recipient);
+    if (!pendingIds || pendingIds.size === 0) {
+      return [];
+    }
+
+    const requests: ShutdownRequest[] = [];
+    for (const id of pendingIds) {
+      const request = this.requests.get(id);
+      if (request && request.respondedAt === undefined) {
+        requests.push(request);
+      }
+    }
+
+    // Sort by creation time (oldest first)
+    return requests.sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  }
+
+  /**
+   * Get a specific request by ID
+   * @param requestId - The request ID
+   * @returns The request or undefined if not found
+   */
+  getRequest(requestId: string): ShutdownRequest | undefined {
+    return this.requests.get(requestId);
+  }
+
+  /**
+   * Get all requests (pending and responded)
+   * @returns Array of all requests
+   */
+  getAllRequests(): ShutdownRequest[] {
+    return Array.from(this.requests.values());
+  }
+
+  /**
+   * Get all pending requests across all recipients
+   * @returns Array of all pending requests
+   */
+  getAllPendingRequests(): ShutdownRequest[] {
+    return Array.from(this.requests.values()).filter(r => r.respondedAt === undefined);
+  }
+
+  /**
+   * Get requests created by a specific requester
+   * @param requester - The agent name who created the requests
+   * @returns Array of requests from the specified requester
+   */
+  getRequesterRequests(requester: string): ShutdownRequest[] {
+    return Array.from(this.requests.values())
+      .filter(r => r.requester === requester)
+      .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime());
+  }
+
+  /**
+   * Check if a recipient has any pending requests
+   * @param recipient - The agent name to check
+   * @returns True if there are pending requests
+   */
+  hasPendingRequests(recipient: string): boolean {
+    const pendingSet = this.pendingByRecipient.get(recipient);
+    return pendingSet !== undefined && pendingSet.size > 0;
+  }
+
+  /**
+   * Get the count of pending requests for a recipient
+   * @param recipient - The agent name to check
+   * @returns The number of pending requests
+   */
+  getPendingCount(recipient: string): number {
+    const pendingSet = this.pendingByRecipient.get(recipient);
+    return pendingSet?.size ?? 0;
+  }
+
+  /**
+   * Cancel a pending request (only if not yet responded)
+   * @param requestId - The request ID to cancel
+   * @returns True if successfully cancelled
+   */
+  cancelRequest(requestId: string): boolean {
+    const request = this.requests.get(requestId);
+    if (!request || request.respondedAt !== undefined) {
+      return false;
+    }
+
+    // Remove from pending tracking
+    const pendingSet = this.pendingByRecipient.get(request.recipient);
+    if (pendingSet) {
+      pendingSet.delete(requestId);
+    }
+
+    // Remove the request
+    this.requests.delete(requestId);
+    return true;
+  }
+
+  /**
+   * Clear all requests (useful for testing or reset)
+   */
+  clearAllRequests(): void {
+    this.requests.clear();
+    this.pendingByRecipient.clear();
+  }
+
+  /**
+   * Get statistics about shutdown requests
+   * @returns Object containing request statistics
+   */
+  getStats(): {
+    total: number;
+    pending: number;
+    approved: number;
+    denied: number;
+  } {
+    const all = Array.from(this.requests.values());
+    return {
+      total: all.length,
+      pending: all.filter(r => r.respondedAt === undefined).length,
+      approved: all.filter(r => r.approved === true).length,
+      denied: all.filter(r => r.approved === false).length
+    };
+  }
+}
+
+// ============================================================================
 // TEAM MANAGER (IN-MEMORY STATE)
 // ============================================================================
 
+/**
+ * Manages teams of agents with integrated session and shutdown management.
+ * Extended to include SessionManager and ShutdownManager functionality.
+ */
 class TeamManager {
   private teams: Map<string, Team> = new Map();
+  private sessionManager: SessionManager;
+  private shutdownManager: ShutdownManager;
+
+  constructor() {
+    this.sessionManager = new SessionManager();
+    this.shutdownManager = new ShutdownManager();
+  }
+
+  // --- Session Manager Integration ---
+
+  /**
+   * Get the session manager instance
+   */
+  get sessions(): SessionManager {
+    return this.sessionManager;
+  }
+
+  /**
+   * Get the shutdown manager instance
+   */
+  get shutdown(): ShutdownManager {
+    return this.shutdownManager;
+  }
+
+  /**
+   * Register a session for an agent in a team
+   */
+  registerAgentSession(
+    teamId: string,
+    agentName: string,
+    sessionID: string,
+    initialStatus: "idle" | "thinking" | "responding" = "idle"
+  ): void {
+    const team = this.teams.get(teamId);
+    if (!team) {
+      throw new Error(`Team ${teamId} not found`);
+    }
+
+    // Register session
+    this.sessionManager.registerSession(agentName, sessionID, initialStatus);
+
+    // Update agent in team
+    const agent = team.agents.get(agentName);
+    if (agent) {
+      agent.sessionID = sessionID;
+      agent.status = initialStatus;
+    }
+  }
+
+  /**
+   * Update agent status across both team and session manager
+   */
+  updateAgentStatus(
+    agentName: string,
+    status: "idle" | "thinking" | "responding",
+    task?: string
+  ): void {
+    // Update in session manager
+    this.sessionManager.updateStatusByAgent(agentName, status, task);
+
+    // Update in all teams where this agent exists
+    for (const team of this.teams.values()) {
+      const agent = team.agents.get(agentName);
+      if (agent) {
+        agent.status = status;
+      }
+    }
+  }
+
+  /**
+   * Get agent session information
+   */
+  getAgentSessionInfo(agentName: string): AgentSession | undefined {
+    return this.sessionManager.getAgentSession(agentName);
+  }
+
+  /**
+   * List all active sessions across all teams
+   */
+  listAllSessions(): AgentSession[] {
+    return this.sessionManager.listSessions();
+  }
+
+  // --- Shutdown Manager Integration ---
+
+  /**
+   * Create a shutdown request for an agent
+   */
+  createAgentShutdownRequest(
+    requester: string,
+    recipient: string,
+    reason: string
+  ): string {
+    return this.shutdownManager.createRequest(requester, recipient, reason);
+  }
+
+  /**
+   * Respond to a shutdown request
+   */
+  respondToShutdownRequest(requestId: string, approved: boolean): boolean {
+    const success = this.shutdownManager.respondToRequest(requestId, approved);
+
+    if (success) {
+      const request = this.shutdownManager.getRequest(requestId);
+      if (request && approved) {
+        // Clean up the recipient's session
+        this.sessionManager.removeSessionByAgent(request.recipient);
+
+        // Remove agent from all teams
+        for (const team of this.teams.values()) {
+          team.agents.delete(request.recipient);
+        }
+      }
+    }
+
+    return success;
+  }
+
+  /**
+   * Get pending shutdown requests for an agent
+   */
+  getPendingShutdownRequests(agentName: string): ShutdownRequest[] {
+    return this.shutdownManager.getPendingRequests(agentName);
+  }
+
+  /**
+   * Get shutdown request statistics
+   */
+  getShutdownStats(): {
+    total: number;
+    pending: number;
+    approved: number;
+    denied: number;
+  } {
+    return this.shutdownManager.getStats();
+  }
+
+  // --- Original Team Manager Methods ---
 
   createTeam(id: string, name: string, preset: string): Team {
     const team: Team = {
@@ -181,6 +728,21 @@ class TeamManager {
       systemPrompt: agentConfig.prompt,
       status: "idle"
     });
+
+    // Also register in session manager
+    this.sessionManager.registerSession(agentName, sessionID, "idle");
+  }
+
+  removeAgent(teamId: string, agentName: string): void {
+    const team = this.teams.get(teamId);
+    if (!team) {
+      throw new Error(`Team ${teamId} not found`);
+    }
+
+    team.agents.delete(agentName);
+
+    // Also remove from session manager
+    this.sessionManager.removeSessionByAgent(agentName);
   }
 
   addMessage(teamId: string, message: DiscussionMessage): void {
@@ -199,11 +761,230 @@ class TeamManager {
   }
 
   removeTeam(id: string): void {
+    const team = this.teams.get(id);
+    if (team) {
+      // Clean up all agent sessions
+      for (const agentName of team.agents.keys()) {
+        this.sessionManager.removeSessionByAgent(agentName);
+      }
+    }
     this.teams.delete(id);
   }
 }
 
 const teamManager = new TeamManager();
+
+// ============================================================================
+// MESSAGE MANAGER (IN-MEMORY STATE)
+// ============================================================================
+
+class MessageManager {
+  private messages: Message[] = [];
+
+  sendMessage(input: {
+    from: string;
+    to: string | "all";
+    content: string;
+    type: Message["type"];
+    requestId?: string;
+    approve?: boolean;
+  }): Message {
+    const message: Message = {
+      id: `msg-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`,
+      from: input.from,
+      to: input.to,
+      content: input.content,
+      timestamp: new Date(),
+      type: input.type,
+      requestId: input.requestId,
+      approve: input.approve
+    };
+    this.messages.push(message);
+    return message;
+  }
+
+  broadcast(from: string, content: string): Message {
+    return this.sendMessage({
+      from,
+      to: "all",
+      content,
+      type: "broadcast"
+    });
+  }
+
+  getMessages(recipient?: string): Message[] {
+    if (!recipient) {
+      return [...this.messages];
+    }
+    return this.messages.filter(
+      (msg) => msg.to === recipient || msg.to === "all" || msg.from === recipient
+    );
+  }
+
+  getPendingRequests(recipient: string): Message[] {
+    return this.messages.filter(
+      (msg) =>
+        (msg.to === recipient || msg.to === "all") &&
+        msg.type === "shutdown_request" &&
+        !this.hasResponse(msg.id, recipient)
+    );
+  }
+
+  private hasResponse(requestId: string, recipient: string): boolean {
+    return this.messages.some(
+      (msg) =>
+        msg.requestId === requestId &&
+        msg.from === recipient &&
+        (msg.type === "shutdown_response" || msg.type === "plan_approval_response")
+    );
+  }
+
+  clear(): void {
+    this.messages = [];
+  }
+}
+
+const messageManager = new MessageManager();
+
+// ============================================================================
+// TASK MANAGER (IN-MEMORY STATE)
+// ============================================================================
+
+class TaskManager {
+  private tasks: Map<string, Task> = new Map();
+
+  createTask(input: {
+    title: string;
+    description?: string;
+    assignee?: string;
+    priority?: "low" | "medium" | "high" | "critical";
+    blocks?: string[];
+    metadata?: Record<string, any>;
+  }): Task {
+    const id = `task-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    const task: Task = {
+      id,
+      title: input.title,
+      description: input.description,
+      assignee: input.assignee,
+      status: "pending",
+      priority: input.priority || "medium",
+      createdAt: new Date(),
+      blocks: input.blocks || [],
+      blockedBy: [],
+      metadata: input.metadata
+    };
+    this.tasks.set(id, task);
+
+    // Update blockedBy for tasks that this task blocks
+    if (task.blocks.length > 0) {
+      for (const blockedTaskId of task.blocks) {
+        const blockedTask = this.tasks.get(blockedTaskId);
+        if (blockedTask && !blockedTask.blockedBy.includes(id)) {
+          blockedTask.blockedBy.push(id);
+        }
+      }
+    }
+
+    return task;
+  }
+
+  getTask(id: string): Task | undefined {
+    return this.tasks.get(id);
+  }
+
+  listTasks(filters?: {
+    status?: Task["status"];
+    assignee?: string;
+    priority?: Task["priority"];
+  }): Task[] {
+    let tasks = Array.from(this.tasks.values());
+
+    if (filters) {
+      if (filters.status) {
+        tasks = tasks.filter(t => t.status === filters.status);
+      }
+      if (filters.assignee) {
+        tasks = tasks.filter(t => t.assignee === filters.assignee);
+      }
+      if (filters.priority) {
+        tasks = tasks.filter(t => t.priority === filters.priority);
+      }
+    }
+
+    // Sort by priority (critical first) then by creation date
+    const priorityOrder = { critical: 0, high: 1, medium: 2, low: 3 };
+    return tasks.sort((a, b) => {
+      if (a.priority !== b.priority) {
+        return priorityOrder[a.priority] - priorityOrder[b.priority];
+      }
+      return a.createdAt.getTime() - b.createdAt.getTime();
+    });
+  }
+
+  updateTask(id: string, updates: Partial<Omit<Task, "id" | "createdAt">>): Task | null {
+    const task = this.tasks.get(id);
+    if (!task) return null;
+
+    // Handle status changes
+    if (updates.status === "completed" && task.status !== "completed") {
+      updates.completedAt = new Date();
+    } else if (updates.status && updates.status !== "completed") {
+      updates.completedAt = undefined;
+    }
+
+    // Handle blocks updates
+    if (updates.blocks !== undefined) {
+      // Remove from old blocked tasks
+      for (const oldBlockedId of task.blocks) {
+        if (!updates.blocks.includes(oldBlockedId)) {
+          const oldTask = this.tasks.get(oldBlockedId);
+          if (oldTask) {
+            oldTask.blockedBy = oldTask.blockedBy.filter(bid => bid !== id);
+          }
+        }
+      }
+      // Add to new blocked tasks
+      for (const newBlockedId of updates.blocks) {
+        const newTask = this.tasks.get(newBlockedId);
+        if (newTask && !newTask.blockedBy.includes(id)) {
+          newTask.blockedBy.push(id);
+        }
+      }
+    }
+
+    // Apply updates
+    Object.assign(task, updates);
+    this.tasks.set(id, task);
+    return task;
+  }
+
+  deleteTask(id: string): boolean {
+    const task = this.tasks.get(id);
+    if (!task) return false;
+
+    // Remove from blockedBy of tasks this task blocks
+    for (const blockedId of task.blocks) {
+      const blockedTask = this.tasks.get(blockedId);
+      if (blockedTask) {
+        blockedTask.blockedBy = blockedTask.blockedBy.filter(bid => bid !== id);
+      }
+    }
+
+    // Remove from blocks of tasks that block this task
+    for (const blockerId of task.blockedBy) {
+      const blockerTask = this.tasks.get(blockerId);
+      if (blockerTask) {
+        blockerTask.blocks = blockerTask.blocks.filter(bid => bid !== id);
+      }
+    }
+
+    this.tasks.delete(id);
+    return true;
+  }
+}
+
+const taskManager = new TaskManager();
 
 // ============================================================================
 // TOOLS
@@ -304,6 +1085,9 @@ const teamDiscussTool = tool({
       response += `### Round ${round}\n\n`;
 
       for (const [agentName, agent] of team.agents) {
+        // Update agent status to "thinking" then "responding"
+        teamManager.updateAgentStatus(agentName, "thinking", `Round ${round} discussion`);
+
         response += `**${agentName}** (${agent.role}):\n`;
 
         // Generate a contextual response based on agent type and history
@@ -321,6 +1105,9 @@ const teamDiscussTool = tool({
 
         response += `${contribution}\n\n`;
 
+        // Update agent status to "responding"
+        teamManager.updateAgentStatus(agentName, "responding", `Round ${round} discussion`);
+
         // Add to history
         teamManager.addMessage(teamId, {
           from: agentName,
@@ -329,6 +1116,9 @@ const teamDiscussTool = tool({
           timestamp: new Date(),
           type: round === 1 ? "statement" : "response"
         });
+
+        // Reset agent status to "idle"
+        teamManager.updateAgentStatus(agentName, "idle");
       }
     }
 
@@ -358,15 +1148,16 @@ const teamDiscussTool = tool({
 const teamStatusTool = tool({
   description: "Get the status and discussion history of a team.",
   args: {
-    teamId: z.string().describe("Team ID to check")
+    teamId: z.string().optional().describe("Team ID to check (optional - shows all teams if not provided)")
   },
   async execute(args, context) {
     const { teamId } = args;
-    const team = teamManager.getTeam(teamId);
 
-    if (!team) {
-      // List all teams if specific team not found
+    if (!teamId) {
+      // List all teams with session info
       const teams = teamManager.listTeams();
+      const allSessions = teamManager.listAllSessions();
+
       if (teams.length === 0) {
         return `No active teams. Use team-spawn to create one.`;
       }
@@ -375,7 +1166,24 @@ const teamStatusTool = tool({
       for (const t of teams) {
         response += `- **${t.name}** (${t.id}): ${t.agents.size} agents, ${t.discussionHistory.length} messages\n`;
       }
+
+      response += `\n## Active Sessions\n\n`;
+      for (const session of allSessions) {
+        const timeSinceActivity = Math.floor((Date.now() - session.lastActivity.getTime()) / 1000);
+        response += `- **${session.agentName}** [${session.status}] - last activity ${timeSinceActivity}s ago`;
+        if (session.currentTask) {
+          response += ` (task: ${session.currentTask})`;
+        }
+        response += `\n`;
+      }
+
       return response;
+    }
+
+    const team = teamManager.getTeam(teamId);
+
+    if (!team) {
+      return `Error: Team ${teamId} not found.`;
     }
 
     let response = `## Team Status: ${team.name}\n\n`;
@@ -386,7 +1194,9 @@ const teamStatusTool = tool({
 
     response += `### Agents (${team.agents.size})\n`;
     for (const [name, agent] of team.agents) {
-      response += `- **${name}**: ${agent.role} [${agent.status}]\n`;
+      const session = teamManager.getAgentSessionInfo(name);
+      const lastActivity = session ? ` (${Math.floor((Date.now() - session.lastActivity.getTime()) / 1000)}s ago)` : "";
+      response += `- **${name}**: ${agent.role} [${agent.status}]${lastActivity}\n`;
     }
 
     response += `\n### Discussion History (${team.discussionHistory.length} messages)\n`;
@@ -417,15 +1227,644 @@ const teamShutdownTool = tool({
 
     const name = team.name;
     const messageCount = team.discussionHistory.length;
+    const agentNames = Array.from(team.agents.keys());
 
     teamManager.removeTeam(teamId);
 
     context.metadata({
       title: `Team Shutdown: ${name}`,
-      metadata: { teamId, archivedMessages: messageCount }
+      metadata: { teamId, archivedMessages: messageCount, agents: agentNames }
     });
 
-    return `## Team Shutdown\n\nTeam "${name}" (${teamId}) has been shut down.\n- Archived ${messageCount} discussion messages.\n- All agent sessions closed.`;
+    return `## Team Shutdown\n\nTeam "${name}" (${teamId}) has been shut down.\n- Archived ${messageCount} discussion messages.\n- Closed ${agentNames.length} agent sessions: ${agentNames.join(", ")}.`;
+  }
+});
+
+// ============================================================================
+// SESSION MANAGEMENT TOOLS
+// ============================================================================
+
+/**
+ * SESSION STATUS - Check agent session status
+ */
+const sessionStatusTool = tool({
+  description: "Get the status of all agent sessions or a specific agent's session.",
+  args: {
+    agentName: z.string().optional().describe("Specific agent name to check (optional)")
+  },
+  async execute(args, context) {
+    const { agentName } = args;
+
+    if (agentName) {
+      const session = teamManager.getAgentSessionInfo(agentName);
+      if (!session) {
+        return `## Session Status\n\nNo active session found for agent "${agentName}".`;
+      }
+
+      const timeSinceActivity = Math.floor((Date.now() - session.lastActivity.getTime()) / 1000);
+
+      let response = `## Session Status: ${session.agentName}\n\n`;
+      response += `**Session ID**: ${session.sessionID}\n`;
+      response += `**Status**: ${session.status}\n`;
+      response += `**Last Activity**: ${timeSinceActivity}s ago\n`;
+      if (session.currentTask) {
+        response += `**Current Task**: ${session.currentTask}\n`;
+      }
+      return response;
+    }
+
+    // Show all sessions
+    const sessions = teamManager.listAllSessions();
+
+    if (sessions.length === 0) {
+      return `## Session Status\n\nNo active sessions.`;
+    }
+
+    let response = `## Active Sessions (${sessions.length})\n\n`;
+
+    const byStatus: Record<string, AgentSession[]> = {
+      idle: [],
+      thinking: [],
+      responding: []
+    };
+
+    for (const session of sessions) {
+      byStatus[session.status].push(session);
+    }
+
+    for (const [status, statusSessions] of Object.entries(byStatus)) {
+      if (statusSessions.length > 0) {
+        response += `### ${status.charAt(0).toUpperCase() + status.slice(1)} (${statusSessions.length})\n`;
+        for (const session of statusSessions) {
+          const timeSinceActivity = Math.floor((Date.now() - session.lastActivity.getTime()) / 1000);
+          response += `- **${session.agentName}**: ${timeSinceActivity}s ago`;
+          if (session.currentTask) {
+            response += ` (${session.currentTask})`;
+          }
+          response += `\n`;
+        }
+        response += `\n`;
+      }
+    }
+
+    return response;
+  }
+});
+
+// ============================================================================
+// SHUTDOWN MANAGEMENT TOOLS
+// ============================================================================
+
+/**
+ * SHUTDOWN AGENT REQUEST - Create a shutdown request for an agent
+ */
+const shutdownAgentRequestTool = tool({
+  description: "Create a shutdown request for an agent. The recipient agent must approve the request.",
+  args: {
+    recipient: z.string().describe("The agent to request shutdown for"),
+    reason: z.string().describe("Reason for the shutdown request")
+  },
+  async execute(args, context) {
+    const { recipient, reason } = args;
+    const requester = "system"; // Default requester
+
+    const requestId = teamManager.createAgentShutdownRequest(requester, recipient, reason);
+
+    context.metadata({
+      title: `Shutdown Request Created`,
+      metadata: { requestId, recipient, requester }
+    });
+
+    return `## Shutdown Request Created\n\n**Request ID**: ${requestId}\n**Recipient**: ${recipient}\n**Reason**: ${reason}\n\nWaiting for ${recipient} to respond. Use \`shutdown-agent-respond\` to approve or deny.`;
+  }
+});
+
+/**
+ * SHUTDOWN AGENT RESPOND - Respond to a shutdown request
+ */
+const shutdownAgentRespondTool = tool({
+  description: "Respond to a pending shutdown request.",
+  args: {
+    requestId: z.string().describe("The shutdown request ID"),
+    approved: z.boolean().describe("Whether to approve the shutdown request")
+  },
+  async execute(args, context) {
+    const { requestId, approved } = args;
+
+    const success = teamManager.respondToShutdownRequest(requestId, approved);
+
+    if (!success) {
+      return `## Shutdown Response Failed\n\nRequest "${requestId}" not found or already responded to.`;
+    }
+
+    const request = teamManager.shutdown.getRequest(requestId);
+
+    context.metadata({
+      title: `Shutdown Response`,
+      metadata: { requestId, approved }
+    });
+
+    let response = `## Shutdown Response\n\n`;
+    response += `**Request ID**: ${requestId}\n`;
+    response += `**Status**: ${approved ? "Approved" : "Denied"}\n`;
+
+    if (approved && request) {
+      response += `\nAgent "${request.recipient}" has been shut down and removed from all teams.`;
+    }
+
+    return response;
+  }
+});
+
+/**
+ * SHUTDOWN AGENT STATUS - Check shutdown request status
+ */
+const shutdownAgentStatusTool = tool({
+  description: "Check pending shutdown requests or get details of a specific request.",
+  args: {
+    requestId: z.string().optional().describe("Specific request ID to check (optional)"),
+    agentName: z.string().optional().describe("Agent name to check pending requests for (optional)")
+  },
+  async execute(args, context) {
+    const { requestId, agentName } = args;
+
+    if (requestId) {
+      const request = teamManager.shutdown.getRequest(requestId);
+      if (!request) {
+        return `## Shutdown Request\n\nRequest "${requestId}" not found.`;
+      }
+
+      let response = `## Shutdown Request: ${requestId}\n\n`;
+      response += `**Requester**: ${request.requester}\n`;
+      response += `**Recipient**: ${request.recipient}\n`;
+      response += `**Reason**: ${request.reason}\n`;
+      response += `**Created**: ${request.createdAt.toISOString()}\n`;
+
+      if (request.respondedAt) {
+        response += `**Responded**: ${request.respondedAt.toISOString()}\n`;
+        response += `**Status**: ${request.approved ? "Approved" : "Denied"}\n`;
+      } else {
+        response += `**Status**: Pending response\n`;
+      }
+
+      return response;
+    }
+
+    if (agentName) {
+      const pendingRequests = teamManager.getPendingShutdownRequests(agentName);
+      if (pendingRequests.length === 0) {
+        return `## Pending Shutdown Requests\n\nNo pending requests for ${agentName}.`;
+      }
+
+      let response = `## Pending Shutdown Requests for ${agentName}\n\n`;
+      for (const request of pendingRequests) {
+        response += `- **${request.id}**\n`;
+        response += `  From: ${request.requester}\n`;
+        response += `  Reason: ${request.reason}\n`;
+        response += `  Created: ${request.createdAt.toLocaleString()}\n\n`;
+      }
+      return response;
+    }
+
+    // Show overall stats
+    const stats = teamManager.getShutdownStats();
+    const allPending = teamManager.shutdown.getAllPendingRequests();
+
+    let response = `## Shutdown Request Status\n\n`;
+    response += `**Total Requests**: ${stats.total}\n`;
+    response += `**Pending**: ${stats.pending}\n`;
+    response += `**Approved**: ${stats.approved}\n`;
+    response += `**Denied**: ${stats.denied}\n`;
+
+    if (allPending.length > 0) {
+      response += `\n### Pending Requests\n`;
+      for (const request of allPending) {
+        response += `- **${request.id}**: ${request.requester} -> ${request.recipient}\n`;
+        response += `  Reason: ${request.reason}\n`;
+      }
+    }
+
+    return response;
+  }
+});
+
+// ============================================================================
+// MESSAGING TOOLS
+// ============================================================================
+
+/**
+ * MESSAGE - Send a message to a specific agent
+ */
+const messageTool = tool({
+  description: "Send a direct message to a specific agent.",
+  args: {
+    from: z.string().describe("Sender agent name"),
+    to: z.string().describe("Recipient agent name"),
+    content: z.string().describe("Message content"),
+    summary: z.string().optional().describe("Optional summary of the message")
+  },
+  async execute(args, context) {
+    const { from, to, content, summary } = args;
+
+    const message = messageManager.sendMessage({
+      from,
+      to,
+      content,
+      type: "message"
+    });
+
+    context.metadata({
+      title: `Message: ${from} -> ${to}`,
+      metadata: { messageId: message.id }
+    });
+
+    let response = `## Message Sent\n\n`;
+    response += `**From**: ${from}\n`;
+    response += `**To**: ${to}\n`;
+    response += `**Message ID**: ${message.id}\n`;
+    response += `**Time**: ${message.timestamp.toLocaleString()}\n\n`;
+    if (summary) {
+      response += `**Summary**: ${summary}\n\n`;
+    }
+    response += `**Content**:\n${content}\n`;
+
+    return response;
+  }
+});
+
+/**
+ * BROADCAST - Send a message to all team members
+ */
+const broadcastTool = tool({
+  description: "Broadcast a message to all team members.",
+  args: {
+    from: z.string().describe("Sender agent name"),
+    content: z.string().describe("Message content"),
+    summary: z.string().optional().describe("Optional summary of the broadcast")
+  },
+  async execute(args, context) {
+    const { from, content, summary } = args;
+
+    const message = messageManager.broadcast(from, content);
+
+    context.metadata({
+      title: `Broadcast from ${from}`,
+      metadata: { messageId: message.id }
+    });
+
+    let response = `## Broadcast Sent\n\n`;
+    response += `**From**: ${from}\n`;
+    response += `**To**: all\n`;
+    response += `**Message ID**: ${message.id}\n`;
+    response += `**Time**: ${message.timestamp.toLocaleString()}\n\n`;
+    if (summary) {
+      response += `**Summary**: ${summary}\n\n`;
+    }
+    response += `**Content**:\n${content}\n`;
+
+    return response;
+  }
+});
+
+/**
+ * SHUTDOWN REQUEST - Request team shutdown
+ */
+const shutdownRequestTool = tool({
+  description: "Request a team shutdown. Requires approval from team members.",
+  args: {
+    from: z.string().describe("Agent requesting shutdown"),
+    teamId: z.string().describe("Team ID to shut down"),
+    reason: z.string().optional().describe("Reason for shutdown request")
+  },
+  async execute(args, context) {
+    const { from, teamId, reason } = args;
+
+    const message = messageManager.sendMessage({
+      from,
+      to: "all",
+      content: reason || "Shutdown requested",
+      type: "shutdown_request",
+      requestId: teamId
+    });
+
+    context.metadata({
+      title: `Shutdown Requested`,
+      metadata: { messageId: message.id, teamId }
+    });
+
+    let response = `## Shutdown Request\n\n`;
+    response += `**From**: ${from}\n`;
+    response += `**Team ID**: ${teamId}\n`;
+    response += `**Request ID**: ${message.id}\n`;
+    response += `**Time**: ${message.timestamp.toLocaleString()}\n\n`;
+    if (reason) {
+      response += `**Reason**: ${reason}\n\n`;
+    }
+    response += `Team members should respond using \`shutdown-response\` to approve or reject.\n`;
+
+    return response;
+  }
+});
+
+/**
+ * SHUTDOWN RESPONSE - Respond to a shutdown request
+ */
+const shutdownResponseTool = tool({
+  description: "Respond to a shutdown request with approval or rejection.",
+  args: {
+    from: z.string().describe("Agent responding"),
+    requestId: z.string().describe("Request ID to respond to"),
+    approve: z.boolean().describe("Whether to approve the shutdown"),
+    comment: z.string().optional().describe("Optional comment on the decision")
+  },
+  async execute(args, context) {
+    const { from, requestId, approve, comment } = args;
+
+    const message = messageManager.sendMessage({
+      from,
+      to: "all",
+      content: comment || (approve ? "Shutdown approved" : "Shutdown rejected"),
+      type: "shutdown_response",
+      requestId,
+      approve
+    });
+
+    context.metadata({
+      title: `Shutdown Response`,
+      metadata: { messageId: message.id, requestId, approved: approve }
+    });
+
+    let response = `## Shutdown Response\n\n`;
+    response += `**From**: ${from}\n`;
+    response += `**Request ID**: ${requestId}\n`;
+    response += `**Response ID**: ${message.id}\n`;
+    response += `**Decision**: ${approve ? "APPROVED" : "REJECTED"}\n`;
+    response += `**Time**: ${message.timestamp.toLocaleString()}\n\n`;
+    if (comment) {
+      response += `**Comment**: ${comment}\n`;
+    }
+
+    return response;
+  }
+});
+
+/**
+ * PLAN APPROVAL RESPONSE - Respond to a plan approval request
+ */
+const planApprovalResponseTool = tool({
+  description: "Respond to a plan approval request with approval or rejection.",
+  args: {
+    from: z.string().describe("Agent responding"),
+    requestId: z.string().describe("Request ID to respond to"),
+    approve: z.boolean().describe("Whether to approve the plan"),
+    comment: z.string().optional().describe("Optional comment on the decision")
+  },
+  async execute(args, context) {
+    const { from, requestId, approve, comment } = args;
+
+    const message = messageManager.sendMessage({
+      from,
+      to: "all",
+      content: comment || (approve ? "Plan approved" : "Plan rejected"),
+      type: "plan_approval_response",
+      requestId,
+      approve
+    });
+
+    context.metadata({
+      title: `Plan Approval Response`,
+      metadata: { messageId: message.id, requestId, approved: approve }
+    });
+
+    let response = `## Plan Approval Response\n\n`;
+    response += `**From**: ${from}\n`;
+    response += `**Request ID**: ${requestId}\n`;
+    response += `**Response ID**: ${message.id}\n`;
+    response += `**Decision**: ${approve ? "APPROVED" : "REJECTED"}\n`;
+    response += `**Time**: ${message.timestamp.toLocaleString()}\n\n`;
+    if (comment) {
+      response += `**Comment**: ${comment}\n`;
+    }
+
+    return response;
+  }
+});
+
+// ============================================================================
+// TASK MANAGEMENT TOOLS
+// ============================================================================
+
+/**
+ * TASK CREATE - Create a new task
+ */
+const taskCreateTool = tool({
+  description: "Create a new task with title, description, assignee, priority, and blocking dependencies.",
+  args: {
+    title: z.string().describe("Task title"),
+    description: z.string().optional().describe("Detailed description of the task"),
+    assignee: z.string().optional().describe("Agent or team assigned to this task"),
+    priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Task priority level"),
+    blocks: z.array(z.string()).optional().describe("List of task IDs that this task blocks"),
+    metadata: z.record(z.string(), z.unknown()).optional().describe("Additional metadata for the task")
+  },
+  async execute(args, context) {
+    const task = taskManager.createTask({
+      title: args.title,
+      description: args.description,
+      assignee: args.assignee,
+      priority: args.priority,
+      blocks: args.blocks,
+      metadata: args.metadata
+    });
+
+    context.metadata({
+      title: `Task Created: ${task.title}`,
+      metadata: { taskId: task.id, priority: task.priority }
+    });
+
+    let response = `## Task Created\n\n`;
+    response += `**ID**: ${task.id}\n`;
+    response += `**Title**: ${task.title}\n`;
+    response += `**Status**: ${task.status}\n`;
+    response += `**Priority**: ${task.priority}\n`;
+
+    if (task.description) {
+      response += `**Description**: ${task.description}\n`;
+    }
+    if (task.assignee) {
+      response += `**Assignee**: ${task.assignee}\n`;
+    }
+    if (task.blocks.length > 0) {
+      response += `**Blocks**: ${task.blocks.join(", ")}\n`;
+    }
+
+    response += `\nUse \`task-get taskId="${task.id}"\` to view details.`;
+
+    return response;
+  }
+});
+
+/**
+ * TASK UPDATE - Update an existing task
+ */
+const taskUpdateTool = tool({
+  description: "Update task status, title, description, assignee, priority, or blocking dependencies.",
+  args: {
+    taskId: z.string().describe("Task ID to update"),
+    title: z.string().optional().describe("New task title"),
+    description: z.string().optional().describe("New task description"),
+    assignee: z.string().optional().describe("New assignee"),
+    status: z.enum(["pending", "in_progress", "completed", "deleted"]).optional().describe("New task status"),
+    priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("New task priority"),
+    blocks: z.array(z.string()).optional().describe("Updated list of task IDs that this task blocks"),
+    metadata: z.record(z.string(), z.unknown()).optional().describe("Updated metadata")
+  },
+  async execute(args, context) {
+    const { taskId, ...updates } = args;
+    const task = taskManager.updateTask(taskId, updates);
+
+    if (!task) {
+      return `Error: Task ${taskId} not found.`;
+    }
+
+    context.metadata({
+      title: `Task Updated: ${task.title}`,
+      metadata: { taskId, status: task.status }
+    });
+
+    let response = `## Task Updated\n\n`;
+    response += `**ID**: ${task.id}\n`;
+    response += `**Title**: ${task.title}\n`;
+    response += `**Status**: ${task.status}\n`;
+    response += `**Priority**: ${task.priority}\n`;
+
+    if (task.description) {
+      response += `**Description**: ${task.description}\n`;
+    }
+    if (task.assignee) {
+      response += `**Assignee**: ${task.assignee}\n`;
+    }
+    if (task.blocks.length > 0) {
+      response += `**Blocks**: ${task.blocks.join(", ")}\n`;
+    }
+    if (task.blockedBy.length > 0) {
+      response += `**Blocked By**: ${task.blockedBy.join(", ")}\n`;
+    }
+    if (task.completedAt) {
+      response += `**Completed At**: ${task.completedAt.toISOString()}\n`;
+    }
+
+    return response;
+  }
+});
+
+/**
+ * TASK LIST - List tasks with optional filters
+ */
+const taskListTool = tool({
+  description: "List all tasks with optional filtering by status, assignee, or priority.",
+  args: {
+    status: z.enum(["pending", "in_progress", "completed", "deleted"]).optional().describe("Filter by status"),
+    assignee: z.string().optional().describe("Filter by assignee"),
+    priority: z.enum(["low", "medium", "high", "critical"]).optional().describe("Filter by priority")
+  },
+  async execute(args, context) {
+    const tasks = taskManager.listTasks({
+      status: args.status,
+      assignee: args.assignee,
+      priority: args.priority
+    });
+
+    if (tasks.length === 0) {
+      return `## Task List\n\nNo tasks found matching the specified criteria.`;
+    }
+
+    let response = `## Task List (${tasks.length} tasks)\n\n`;
+
+    for (const task of tasks) {
+      response += `### ${task.title}\n`;
+      response += `- **ID**: ${task.id}\n`;
+      response += `- **Status**: ${task.status}\n`;
+      response += `- **Priority**: ${task.priority}\n`;
+      if (task.assignee) {
+        response += `- **Assignee**: ${task.assignee}\n`;
+      }
+      if (task.blocks.length > 0) {
+        response += `- **Blocks**: ${task.blocks.join(", ")}\n`;
+      }
+      if (task.blockedBy.length > 0) {
+        response += `- **Blocked By**: ${task.blockedBy.join(", ")}\n`;
+      }
+      response += `- **Created**: ${task.createdAt.toISOString()}\n`;
+      response += "\n";
+    }
+
+    context.metadata({
+      title: `Task List`,
+      metadata: { count: tasks.length }
+    });
+
+    return response;
+  }
+});
+
+/**
+ * TASK GET - Get detailed information about a specific task
+ */
+const taskGetTool = tool({
+  description: "Get detailed information about a specific task including its dependencies.",
+  args: {
+    taskId: z.string().describe("Task ID to retrieve")
+  },
+  async execute(args, context) {
+    const task = taskManager.getTask(args.taskId);
+
+    if (!task) {
+      return `Error: Task ${args.taskId} not found.`;
+    }
+
+    let response = `## Task Details\n\n`;
+    response += `**ID**: ${task.id}\n`;
+    response += `**Title**: ${task.title}\n`;
+    response += `**Status**: ${task.status}\n`;
+    response += `**Priority**: ${task.priority}\n`;
+    response += `**Created**: ${task.createdAt.toISOString()}\n`;
+
+    if (task.description) {
+      response += `\n**Description**:\n${task.description}\n`;
+    }
+    if (task.assignee) {
+      response += `\n**Assignee**: ${task.assignee}\n`;
+    }
+    if (task.completedAt) {
+      response += `**Completed At**: ${task.completedAt.toISOString()}\n`;
+    }
+
+    // Dependencies
+    if (task.blocks.length > 0 || task.blockedBy.length > 0) {
+      response += `\n**Dependencies**:\n`;
+      if (task.blocks.length > 0) {
+        response += `- Blocks: ${task.blocks.join(", ")}\n`;
+      }
+      if (task.blockedBy.length > 0) {
+        response += `- Blocked by: ${task.blockedBy.join(", ")}\n`;
+      }
+    }
+
+    // Metadata
+    if (task.metadata && Object.keys(task.metadata).length > 0) {
+      response += `\n**Metadata**:\n`;
+      for (const [key, value] of Object.entries(task.metadata)) {
+        response += `- ${key}: ${JSON.stringify(value)}\n`;
+      }
+    }
+
+    context.metadata({
+      title: `Task: ${task.title}`,
+      metadata: { taskId: task.id, status: task.status, priority: task.priority }
+    });
+
+    return response;
   }
 });
 
@@ -536,7 +1975,20 @@ const plugin: Plugin = async (input: PluginInput) => {
       "team-spawn": teamSpawnTool,
       "team-discuss": teamDiscussTool,
       "team-status": teamStatusTool,
-      "team-shutdown": teamShutdownTool
+      "team-shutdown": teamShutdownTool,
+      "session-status": sessionStatusTool,
+      "shutdown-agent-request": shutdownAgentRequestTool,
+      "shutdown-agent-respond": shutdownAgentRespondTool,
+      "shutdown-agent-status": shutdownAgentStatusTool,
+      "message": messageTool,
+      "broadcast": broadcastTool,
+      "shutdown-request": shutdownRequestTool,
+      "shutdown-response": shutdownResponseTool,
+      "plan-approval-response": planApprovalResponseTool,
+      "task-create": taskCreateTool,
+      "task-update": taskUpdateTool,
+      "task-list": taskListTool,
+      "task-get": taskGetTool
     }
   };
 };
