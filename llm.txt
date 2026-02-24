@@ -1,0 +1,161 @@
+# OpenCode Agent Teams Plugin - LLM Context
+
+## Project Overview
+
+This is an OpenCode plugin that provides multi-agent team collaboration capabilities, designed to match Claude Code's agent-teams functionality.
+
+## Architecture
+
+```
+plugins/agent-teams/
+├── src/
+│   └── index.ts      # Main plugin code
+├── package.json
+├── tsconfig.json
+└── README.md
+```
+
+## Key Components
+
+### 1. Tools
+
+| Tool | Description |
+|------|-------------|
+| `team-spawn` | Create agent team with preset or custom agents |
+| `team-discuss` | Run parallel discussion between agents |
+| `team-status` | Check team status |
+| `team-shutdown` | Remove team |
+| `team-auto` | Natural language team request |
+
+### 2. State Management
+
+```typescript
+interface Team {
+  id: string;
+  name: string;
+  agents: Map<string, Agent>;
+}
+
+interface Agent {
+  name: string;
+  sessionID: string;
+  role: string;
+  status: "idle" | "thinking" | "responding";
+}
+```
+
+### 3. Parallel Execution
+
+All agents execute in parallel using `Promise.all()`:
+```typescript
+const results = await Promise.all(
+  agents.map(agent => executeAgent(agent, prompt))
+);
+```
+
+## Presets
+
+```typescript
+const PRESETS = {
+  "review": ["code-reviewer", "security-auditor", "devil-s-advocate"],
+  "security": ["security-auditor", "devil-s-advocate"],
+  "debug": ["debugger", "devil-s-advocate"],
+  "feature": ["frontend-dev", "backend-dev", "test-automator", "devil-s-advocate"],
+  "architecture": ["architect", "devil-s-advocate"]
+};
+```
+
+## Agent Prompts
+
+Each agent has a specialized prompt:
+
+```typescript
+const AGENT_PROMPTS = {
+  "code-reviewer": {
+    role: "Code Quality Specialist",
+    prompt: "You are an expert code reviewer..."
+  },
+  "security-auditor": {
+    role: "Security Specialist",
+    prompt: "You are a security auditor..."
+  },
+  "devil-s-advocate": {
+    role: "Critical Thinker",
+    prompt: "You are the Devil's Advocate..."
+  }
+};
+```
+
+## Usage Patterns
+
+### Natural Language
+```
+Input: "이 코드를 팀을 짜서 보안 검토해줘"
+→ Detects "보안" → Uses "security" preset
+→ Creates team with security-auditor + devil-s-advocate
+```
+
+### Manual
+```
+/team-spawn preset="review" teamName="auth-review" task="코드 리뷰"
+/team-discuss teamId="team-xxx" topic="SQL injection"
+```
+
+## Output Format
+
+```
+## Team "name" Created
+
+**Team ID**: team-xxx
+**Preset**: review
+
+### Agents
+- **agent-name** (Role)
+
+### Discussion
+
+**agent-1**:
+- Finding 1
+- Finding 2
+
+**agent-2**:
+- Finding 1
+
+**devil-s-advocate**:
+### What Others Missed
+1. Issue not found by others
+```
+
+## Error Handling
+
+- Invalid preset → Falls back to "review"
+- Missing teamId → Returns error message
+- Unknown agent → Uses generic agent with name as role
+
+## Dependencies
+
+- `@opencode-ai/plugin`: OpenCode plugin SDK
+- `zod`: Schema validation (via `tool.schema`)
+
+## Build
+
+```bash
+bun install
+bun run build  # Outputs to dist/index.js
+```
+
+## Configuration
+
+Add to `opencode.json`:
+```json
+{
+  "plugin": ["./plugins/agent-teams"]
+}
+```
+
+## Key Constraints
+
+1. **Devil's Advocate Required**: Every preset includes devil-s-advocate
+2. **Max Team Size**: 10 agents (configurable)
+3. **Memory-Based State**: Teams stored in Map, not persisted
+4. **Zod Compatibility**: Must use `tool.schema` for type safety
