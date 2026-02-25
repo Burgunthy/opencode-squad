@@ -10,7 +10,7 @@ A production-ready multi-agent team collaboration plugin for [OpenCode](https://
 - **Devil's Advocate**: Critical thinking agent included in every team preset
 - **Natural Language**: Auto-detect team preset from keywords
 - **Persistence**: Team state saved to `~/.opencode/teams/`
-- **10 Tools**: Complete team and task management
+- **26 Tools**: Complete team, task, plan, and reputation management
 
 ## Quick Start
 
@@ -19,7 +19,7 @@ A production-ready multi-agent team collaboration plugin for [OpenCode](https://
 npm install @opencode-ai/squad
 
 # Or clone
-git clone https://github.com/Burgunthy/opencode-agent-team.git ~/.config/opencode/plugins/opencode-squad
+git clone https://github.com/Burgunthy/opencode-squad.git ~/.config/opencode/plugins/opencode-squad
 cd ~/.config/opencode/plugins/opencode-squad && bun install && bun run build
 ```
 
@@ -42,7 +42,7 @@ Add to opencode.json:
 
 ```bash
 # Clone the repository
-git clone https://github.com/Burgunthy/opencode-agent-team.git ~/.config/opencode/plugins/opencode-squad
+git clone https://github.com/Burgunthy/opencode-squad.git ~/.config/opencode/plugins/opencode-squad
 
 # Install dependencies and build
 cd ~/.config/opencode/plugins/opencode-squad
@@ -67,8 +67,9 @@ Add to your `opencode.json`:
 }
 ```
 
-## Available Tools
+## Available Tools (26)
 
+### Team Management (6)
 | Tool | Description |
 |------|-------------|
 | `team-spawn` | Create a team with preset or custom agents |
@@ -77,10 +78,38 @@ Add to your `opencode.json`:
 | `team-status` | Check team status and results |
 | `team-shutdown` | Cleanup and remove team |
 | `team-auto` | Natural language team request |
+
+### Task Management (4)
+| Tool | Description |
+|------|-------------|
 | `task-create` | Create a task with dependencies |
 | `task-update` | Update task status, owner, dependencies |
 | `task-execute` | Execute tasks respecting dependencies |
 | `task-list` | List all tasks in a team |
+
+### Plan Approval (6)
+| Tool | Description |
+|------|-------------|
+| `plan-submit` | Submit a plan for approval |
+| `plan-approve` | Approve a submitted plan |
+| `plan-reject` | Reject a plan with feedback |
+| `plan-list` | List all plans |
+| `plan-status` | Get plan details |
+| `plan-resubmit` | Resubmit a rejected plan |
+
+### Reputation & Differentiation (10)
+| Tool | Description |
+|------|-------------|
+| `agent-reputation` | Get agent reputation info |
+| `agent-score` | Score an agent (1-10) |
+| `agent-scores` | Get score history |
+| `agent-rankings` | Get agent rankings |
+| `team-vote` | Run team voting |
+| `team-score` | Score team results |
+| `team-summarize` | Generate summary report |
+| `agent-handoff` | Delegate tasks between agents |
+| `conflict-resolve` | Structured conflict resolution |
+| `da-critique` | Auto Devil's Advocate critique |
 
 ## Team Presets
 
@@ -298,7 +327,11 @@ Features:
 | Task Dependencies | blocks/blockedBy | blocks/blockedBy |
 | Task Update | TaskUpdate | task-update |
 | Persistence | Memory | File-based |
-| Inter-agent Messaging | SendMessage | Planned |
+| Inter-agent Messaging | SendMessage | SendMessage (via message queue) |
+| Plan Approval | ❌ | ✅ 6 tools |
+| Reputation System | ❌ | ✅ 4 tools |
+| Voting System | ❌ | ✅ team-vote |
+| Korean Optimization | ❌ | ✅ Korean prompts |
 
 ## Development
 
@@ -317,14 +350,17 @@ bun test test/unit.test.ts
 bun test test/integration.test.ts
 ```
 
-## Test Coverage
+## Testing
 
-| Category | Tests | Pass Rate |
-|----------|-------|-----------|
-| Unit Tests | 50 | 92% |
-| Integration Tests | 24 | 100% |
-| E2E Tests | 19 | 100% |
-| **Total** | **93** | **91.4%** |
+```bash
+# Build verification
+bun run build
+
+# Manual testing
+/team-auto "이 코드를 리뷰해줘"
+```
+
+> **Note**: Automated unit tests are planned for v1.1.0. The plugin is currently verified through manual testing and TypeScript strict mode compilation.
 
 ## Security
 
@@ -351,8 +387,8 @@ MIT
 
 ```bash
 # 1. Repository 포크 및 클론
-git clone https://github.com/YOUR_USERNAME/opencode-agent-team.git
-cd opencode-agent-team
+git clone https://github.com/YOUR_USERNAME/opencode-squad.git
+cd opencode-squad
 
 # 2. 의존성 설치
 bun install
@@ -404,7 +440,7 @@ export const PRESETS: Record<string, AgentPreset[]> = {
 
 ### 이슈 보고
 
-버그나 기능 요청은 [GitHub Issues](https://github.com/Burgunthy/opencode-agent-team/issues)에 등록해주세요.
+버그나 기능 요청은 [GitHub Issues](https://github.com/Burgunthy/opencode-squad/issues)에 등록해주세요.
 
 ### 라이선스
 
