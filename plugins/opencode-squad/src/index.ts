@@ -1337,6 +1337,14 @@ const teamSpawnTool = tool({
       return "Error: OpenCode client not available";
     }
 
+    // 입력 검증
+    if (!args.teamName || args.teamName.trim() === "") {
+      return `Error: Team name is required`;
+    }
+    if (!args.task || args.task.trim() === "") {
+      return `Error: Task description is required`;
+    }
+
     const presetValue = args.preset ?? DEFAULT_PRESET;
     const teamId = `team-${Date.now()}-${randomUUID().slice(0, 8)}`;
     const availableAgents = loadOpenCodeAgents();
@@ -1472,6 +1480,14 @@ const teamDiscussTool = tool({
   async execute(args) {
     if (!globalClient) {
       return "Error: OpenCode client not available";
+    }
+
+    // 입력 검증
+    if (!args.teamId || args.teamId.trim() === "") {
+      return `Error: Team ID is required`;
+    }
+    if (!args.topic || args.topic.trim() === "") {
+      return `Error: Discussion topic is required`;
     }
 
     const team = teams.get(args.teamId);
@@ -1630,6 +1646,11 @@ const teamAutoTool = tool({
   async execute(args) {
     if (!globalClient) {
       return "Error: OpenCode client not available";
+    }
+
+    // 입력 검증
+    if (!args.request || args.request.trim() === "") {
+      return `Error: Request is required`;
     }
 
     const preset = detectPreset(args.request);
@@ -1793,6 +1814,17 @@ const taskCreateTool = tool({
     blockedBy: z.string().optional().describe("Comma-separated task IDs this depends on")
   },
   async execute(args) {
+    // 입력 검증
+    if (!args.teamId || args.teamId.trim() === "") {
+      return `Error: Team ID is required`;
+    }
+    if (!args.subject || args.subject.trim() === "") {
+      return `Error: Task subject is required`;
+    }
+    if (!args.description || args.description.trim() === "") {
+      return `Error: Task description is required`;
+    }
+
     const team = teams.get(args.teamId);
     if (!team) {
       return `Error: Team ${args.teamId} not found`;
@@ -1822,6 +1854,19 @@ const taskCreateTool = tool({
       if (depTask && !depTask.blocks.includes(task.id)) {
         depTask.blocks.push(task.id);
       }
+    }
+
+    // 순환 의존성 감지
+    if (detectCyclicDependency(team, task.id)) {
+      // 롤백: 태스크 삭제
+      team.tasks.delete(task.id);
+      for (const depId of blockedBy) {
+        const depTask = team.tasks.get(depId);
+        if (depTask) {
+          depTask.blocks = depTask.blocks.filter(id => id !== task.id);
+        }
+      }
+      return `Error: Creating this task would cause a cyclic dependency. Task not created.`;
     }
 
     saveTeam(team);
@@ -2059,6 +2104,17 @@ const planSubmitTool = tool({
     content: z.string().describe("Plan content/description"),
   },
   async execute(args) {
+    // 입력 검증
+    if (!args.agentId || args.agentId.trim() === "") {
+      return `Error: Agent ID is required`;
+    }
+    if (!args.agentName || args.agentName.trim() === "") {
+      return `Error: Agent name is required`;
+    }
+    if (!args.content || args.content.trim() === "") {
+      return `Error: Plan content is required`;
+    }
+
     const plan = createPlan(args.agentId, args.agentName, args.content);
 
     let response = `## Plan Submitted for Approval\n\n`;
@@ -2081,6 +2137,11 @@ const planApproveTool = tool({
     planId: z.string().describe("Plan ID to approve"),
   },
   async execute(args) {
+    // 입력 검증
+    if (!args.planId || args.planId.trim() === "") {
+      return `Error: Plan ID is required`;
+    }
+
     const plan = updatePlanStatus(args.planId, "approved");
     if (!plan) {
       return `Error: Plan ${args.planId} not found`;
@@ -2107,6 +2168,14 @@ const planRejectTool = tool({
     feedback: z.string().describe("Reason for rejection and improvement suggestions"),
   },
   async execute(args) {
+    // 입력 검증
+    if (!args.planId || args.planId.trim() === "") {
+      return `Error: Plan ID is required`;
+    }
+    if (!args.feedback || args.feedback.trim() === "") {
+      return `Error: Feedback is required for rejection`;
+    }
+
     const plan = updatePlanStatus(args.planId, "rejected", args.feedback);
     if (!plan) {
       return `Error: Plan ${args.planId} not found`;
@@ -2365,9 +2434,21 @@ const teamVoteTool = tool({
       return "Error: OpenCode client not available";
     }
 
+    // 입력 검증
+    if (!args.teamId || args.teamId.trim() === "") {
+      return `Error: Team ID is required`;
+    }
+    if (!args.proposal || args.proposal.trim() === "") {
+      return `Error: Proposal is required`;
+    }
+
     const team = teams.get(args.teamId);
     if (!team) {
       return `Error: Team ${args.teamId} not found`;
+    }
+
+    if (team.agents.size === 0) {
+      return `Error: Team has no agents to vote`;
     }
 
     const threshold = args.threshold ?? "majority";

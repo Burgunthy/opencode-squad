@@ -1,4 +1,4 @@
-# @opencode-ai/agent-teams
+# @opencode-ai/squad
 
 A production-ready multi-agent team collaboration plugin for [OpenCode](https://opencode.ai) that spawns real subagents and executes them in parallel.
 
@@ -28,7 +28,7 @@ bun install && bun run build
 ### Option 2: npm (Coming Soon)
 
 ```bash
-bun add @opencode-ai/agent-teams
+bun add @opencode-ai/squad
 ```
 
 ## Configuration

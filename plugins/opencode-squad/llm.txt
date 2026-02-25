@@ -1,4 +1,4 @@
-# @opencode-ai/agent-teams - LLM Context
+# @opencode-ai/squad - LLM Context
 
 ## Project Overview
 

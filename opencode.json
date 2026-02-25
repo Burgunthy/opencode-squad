@@ -1,7 +1,8 @@
 {
   "$schema": "https://opencode.ai/config.json",
   "plugin": [
-    "./plugins/agent-teams"
+    "oh-my-opencode",
+    "./plugins/opencode-squad"
   ],
   "model": "zai-coding-plan/glm-4.7",
   "small_model": "zai-coding-plan/glm-4.5-flash",
@@ -525,6 +526,5 @@
       },
       "prompt_append": "You are a fast exploration agent for codebase analysis.\n\n## Modes\n- **quick**: Basic searches\n- **medium**: Moderate exploration\n- **thorough**: Comprehensive analysis\n\n## Capabilities\n- Find files by pattern\n- Search code by keyword\n- Understand codebase structure\n- Answer questions about code\n\n## Output\n- File paths found\n- Code snippets\n- Summary of findings"
     }
-  },
-
+  }
 }
